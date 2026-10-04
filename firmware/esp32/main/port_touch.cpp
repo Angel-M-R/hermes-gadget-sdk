@@ -19,6 +19,8 @@ const char* TAG = "hg.touch";
 constexpr uint32_t kPollMs = 20;
 constexpr uint8_t kTca9554Input = 0x00;
 constexpr uint8_t kCstAck = 0xAB;
+constexpr uint8_t kCst820Points = 0x02;      // finger count, then X and Y, 12 bits each
+constexpr uint8_t kCst820NoAutoSleep = 0xFE;  // else it stops answering I2C when idle
 
 }  // namespace
 
@@ -43,6 +45,19 @@ bool TouchInput::begin(const TouchConfig& touch, const ExpanderKeyConfig& key, i
         esp_lcd_touch_new_i2c_ft5x06(io, &cfg, &managed_touch_) != ESP_OK) esp_lcd_panel_io_del(io);
   } else if (touch.enabled && touch.controller == TouchController::Box3) {
     begin_box_touch(bus);
+  } else if (touch.enabled && touch.controller == TouchController::Cst820) {
+    // Reset it again: idle since power-up it may have gone to sleep, and asleep it ignores I2C.
+    if (touch.expander_rst >= 0) expander::pulse(static_cast<uint8_t>(touch.expander_rst));
+    i2c_device_config_t dev = {};
+    dev.dev_addr_length = I2C_ADDR_BIT_LEN_7;
+    dev.device_address = touch.addr;
+    dev.scl_speed_hz = 400000;
+    if (i2c_master_bus_add_device(bus, &dev, &touch_dev_) == ESP_OK) {
+      const uint8_t stay_awake[2] = {kCst820NoAutoSleep, 0x01};
+      if (i2c_master_transmit(touch_dev_, stay_awake, sizeof(stay_awake), 50) != ESP_OK) {
+        ESP_LOGW(TAG, "touch controller at 0x%02x did not answer", touch.addr);
+      }
+    }
   } else if (touch.enabled) {
     if (touch.rst >= 0) {
       gpio_config_t rst = {};
@@ -86,6 +101,17 @@ bool TouchInput::read_touch(TouchSample& out) {
     uint8_t points = 0;
     const bool down = esp_lcd_touch_get_coordinates(managed_touch_, &x, &y, nullptr, &points, 1);
     out = {down && points > 0, static_cast<int16_t>(x), static_cast<int16_t>(y)};
+    return true;
+  }
+  if (touch_.controller == TouchController::Cst820) {
+    uint8_t reg = kCst820Points, buf[5] = {};
+    if (i2c_master_transmit_receive(touch_dev_, &reg, 1, buf, sizeof(buf), 20) != ESP_OK) return false;
+    const bool down = (buf[0] & 0x0F) > 0;
+    int x = std::min<int>(((buf[1] & 0x0F) << 8) | buf[2], touch_.width - 1);
+    int y = std::min<int>(((buf[3] & 0x0F) << 8) | buf[4], touch_.height - 1);
+    if (touch_.mirror_x) x = touch_.width - 1 - x;
+    if (touch_.mirror_y) y = touch_.height - 1 - y;
+    out = {down, static_cast<int16_t>(x), static_cast<int16_t>(y)};
     return true;
   }
   const uint8_t reg[2] = {0xD0, 0x00};

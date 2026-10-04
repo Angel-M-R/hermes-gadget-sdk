@@ -32,9 +32,13 @@ struct I2sSpeakerConfig {
   int bclk = -1, ws = -1, dout = -1;
 };
 
-// QSPI AMOLED with a CO5300 controller (round 466x466 panels).
+// QSPI AMOLED with a CO5300 controller. Each panel has its own start-up
+// sequence: the round 466x466 1.75" or the rectangular 368x448 1.8".
+enum class AmoledPanel { Round175, Rect18 };
+
 struct AmoledConfig {
   bool enabled = false;
+  AmoledPanel panel = AmoledPanel::Round175;
   uint16_t width = 466, height = 466;
   int cs = -1, sclk = -1, d0 = -1, d1 = -1, d2 = -1, d3 = -1, rst = -1;
   int gap_x = 0, gap_y = 0;  // the controller's RAM is wider than the glass
@@ -48,8 +52,10 @@ struct I2cBusConfig {
 };
 
 // ES8311/AW88298 (speaker) and ES7210 (microphone ADC) sharing one duplex I2S bus,
-// controlled over the I2C bus.
+// controlled over the I2C bus. A board with one microphone may take it through the
+// ES8311's own ADC instead.
 enum class SpeakerCodec { Es8311, Aw88298 };
+enum class MicCodec { Es7210, Es8311 };
 
 struct CodecAudioConfig {
   bool enabled = false;
@@ -58,15 +64,17 @@ struct CodecAudioConfig {
   float amp_supply_v = 5.0f;  // amplifier supply; the ES8311 driver sets its output level from it
   float mic_gain_db = 24.0f;
   SpeakerCodec speaker = SpeakerCodec::Es8311;
+  MicCodec mic = MicCodec::Es7210;
 };
 
 // Capacitive touch on the I2C bus: hold to talk, tap, swipe down to cancel.
-enum class TouchController { Cst9217, Box3, Ft5x06 };
+enum class TouchController { Cst9217, Box3, Ft5x06, Cst820 };
 
 struct TouchConfig {
   bool enabled = false;
   uint8_t addr = 0x5A;
   int rst = -1;
+  int expander_rst = -1;  // reset on an ExpanderResetConfig output bit instead of a GPIO
   uint16_t width = 0, height = 0;
   bool mirror_x = false, mirror_y = false;
   TouchController controller = TouchController::Cst9217;
@@ -79,6 +87,16 @@ struct ExpanderKeyConfig {
   uint8_t addr = 0x20;
   uint8_t bit = 0;
   bool active_high = true;
+};
+
+// TCA9554 outputs that power or reset other parts (the AMOLED-1.8's panel and
+// touch controller). At start-up they become outputs at their `idle` levels,
+// then all go high together.
+struct ExpanderResetConfig {
+  bool enabled = false;
+  uint8_t addr = 0x20;
+  uint8_t outputs = 0;  // bit mask of the pins the firmware drives
+  uint8_t idle = 0;     // their levels while the parts are held in reset
 };
 
 struct ButtonConfig {
@@ -101,6 +119,7 @@ struct BoardConfig {
   CodecAudioConfig codec;
   TouchConfig touch;
   ExpanderKeyConfig pwr_key;
+  ExpanderResetConfig expander_resets;
   bool axp2101 = false;
   bool axp_audio_supply = false;
   bool cores3 = false;

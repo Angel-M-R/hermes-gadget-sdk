@@ -195,6 +195,14 @@ namespace i2c {
 i2c_master_bus_handle_t bus(const I2cBusConfig& cfg);
 }
 
+namespace expander {
+// Makes the board's expander reset pins outputs at their idle levels, then
+// releases them together. Call before the display and touch start.
+bool release_resets(const ExpanderResetConfig& cfg, i2c_master_bus_handle_t bus);
+// Pulses one of those pins low for 10 ms, for a part that needs another reset.
+bool pulse(uint8_t bit);
+}
+
 // ES8311 + ES7210 on one duplex I2S bus through esp_codec_dev. Both directions
 // run at one fixed rate (they share the bit clock).
 class CodecAudio {

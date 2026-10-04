@@ -138,6 +138,37 @@ Before relying on the port, run the [physical checklist](hardware-validation.md)
 
 References: [M5Stack hardware and recovery instructions](https://docs.m5stack.com/en/core/CoreS3), [Espressif board definitions](https://github.com/espressif/esp-bsp/tree/master/bsp/m5stack_core_s3), [AW9523 registers](https://m5stack.oss-cn-shenzhen.aliyuncs.com/resource/docs/products/core/CoreS3/AW9523B-EN.pdf), and [AXP2101 registers](https://files.waveshare.com/wiki/common/X-power-AXP2101_SWcharge_V1.0.pdf). See [README](../README.md#license) for driver licenses and the adapted ILI9342E table's notice.
 
+## ESP32-S3-Touch-AMOLED-1.8
+
+Board option `esp32s3-touch-amoled-18`, for the **V2** of Waveshare's 1.8" board: an ESP32-S3R8 (8 MB octal PSRAM) with 16 MB flash, a rectangular 368×448 AMOLED, touch, one microphone, an onboard speaker and a battery charger. The label on the back says which version you have. V1 boards (SH8601 panel, FT3168 touch) are different hardware and need their own port. This is an experimental port.
+
+| Part | Chip | Connection |
+|---|---|---|
+| Display | CO5300, QSPI | CS 12, SCLK 11, D0–D3 4/5/6/7; column offset 16 |
+| Touch | CST820 | I2C 0x15 (polled) |
+| Speaker DAC and microphone ADC | ES8311 | I2C 0x18; I2S MCLK 16, BCLK 9, WS 45, DOUT 8, DIN 10; amplifier enable 46 |
+| Power | AXP2101 | I2C 0x34; battery/USB readings and local power-off |
+| I/O expander | TCA9554 | I2C 0x20; P0 panel reset, P1 panel power, P2 touch reset, P7 SD chip select |
+| I2C bus | | SDA 15, SCL 14, 400 kHz |
+| BOOT key | | GPIO 0 |
+
+At start-up the firmware makes the four expander pins outputs, held low with the SD card deselected, then raises them together. That powers the panel and releases both resets. The touch controller gets a second reset just before it is first read, and its idle sleep is turned off: asleep, it stops answering I2C.
+
+The ES8311 records as well as plays, so there is no ES7210. Hold the screen or the upper side key (BOOT) to talk. Swipe down to cancel. PWR reaches the ESP32 only through the AXP2101, so it keeps its hardware role and does not act as CANCEL. The IMU, RTC and SD card are not used.
+
+The speaker is quiet at the default 70% volume. Set it to 100% in the device settings, or with `set volume 100` on the serial console.
+
+Build and flash over the board's USB-C data port:
+
+```bash
+cd firmware/esp32
+pio run -e esp32s3-touch-amoled-18 -t upload -t monitor
+```
+
+On the first flash, check the boot log for `CO5300 368x448 ready`, `codecs: speaker ready, microphones ready` and `touch ready`. The `diag` report's `i2c` should include `0x15` (CST820), `0x18` (ES8311), `0x20` (TCA9554) and `0x34` (AXP2101). Then check that the picture is upright with no stripe at the left or right edge, that a swipe down (not up) cancels, the microphone level, and a spoken reply. Record the result in the [verification table](hardware-validation.md).
+
+Pin, panel and expander references: Waveshare's [board support package](https://components.espressif.com/components/waveshare/esp32_s3_touch_amoled_1_8) and its V2 examples. The port reuses the CO5300, AXP2101 and Espressif codec drivers; see the [license notes](../README.md#license).
+
 ## ESP32-S3-Touch-AMOLED-1.75C
 
 Use `esp32s3-touch-amoled-175c` for SKUs 33691/33692, the enclosed model with 32 MB flash and 8 MB octal PSRAM. This is an experimental port. Use its exact image; the 1.75 model's image has different pins.

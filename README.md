@@ -43,6 +43,7 @@ Your Hermes does the thinking. Real conversations need Hermes Agent and the Gadg
 | [Waveshare ESP32-S3-LCD-1.54](docs/hardware.md#waveshare-esp32-s3-lcd-154) | Hold BOOT | Onboard microphones and speaker |
 | [Waveshare ESP32-S3-Touch-AMOLED-1.75](docs/hardware.md#esp32-s3-touch-amoled-175) | Hold the screen | Onboard microphones; speaker output |
 | [Waveshare ESP32-S3-Touch-AMOLED-1.75C](docs/hardware.md#esp32-s3-touch-amoled-175c) | Hold the screen | Onboard microphones and speaker; experimental |
+| [Waveshare ESP32-S3-Touch-AMOLED-1.8 (V2)](docs/hardware.md#esp32-s3-touch-amoled-18) | Hold the screen or BOOT | Onboard microphone and speaker; experimental |
 | [Espressif ESP32-S3-BOX-3](docs/hardware.md#esp32-s3-box-3) | Hold the screen or BOOT | Onboard microphones and speaker; experimental |
 | [M5Stack CoreS3](docs/hardware.md#m5stack-cores3) | Hold the screen | Onboard audio and battery management; experimental |
 | [ESP32-S3 breadboard build](docs/hardware.md) | Hold TALK | Wire the microphone and optional speaker |
