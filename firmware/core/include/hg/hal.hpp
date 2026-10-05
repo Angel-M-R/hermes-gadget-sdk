@@ -29,6 +29,9 @@ struct DisplayInfo {
   // Rounded glass corners, radius in pixels: the top and bottom bars grow a
   // little and keep their text clear of the curve.
   uint8_t corner_radius = 0;
+  // OLED / AMOLED: an unlit pixel draws no power, so the UI paints its
+  // background and bars pure black instead of a dark tint.
+  bool emissive = false;
 };
 
 // A full-frame RGB565 framebuffer owned by the port (PSRAM on hardware).

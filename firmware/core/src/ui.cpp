@@ -11,8 +11,10 @@
 namespace hg {
 namespace {
 
-constexpr uint16_t kBg = rgb565(10, 14, 20);
-constexpr uint16_t kBar = rgb565(24, 31, 42);
+// A backlit LCD shows a dark tint; an emissive panel keeps those pixels off (Ui::bg_, Ui::bar_).
+constexpr uint16_t kTintBg = rgb565(10, 14, 20);
+constexpr uint16_t kTintBar = rgb565(24, 31, 42);
+constexpr uint16_t kButton = rgb565(24, 31, 42);  // the speaker button stays visible on black
 constexpr uint16_t kText = rgb565(232, 238, 242);
 constexpr uint16_t kDim = rgb565(132, 146, 160);
 constexpr uint16_t kFaint = rgb565(52, 62, 76);
@@ -219,6 +221,8 @@ const char* screen_name(Screen s) {
 }
 
 Ui::Ui(Display& display) : display_(display), panel_(display.info()), info_(panel_) {
+  bg_ = panel_.emissive ? rgb565(0, 0, 0) : kTintBg;
+  bar_ = panel_.emissive ? rgb565(0, 0, 0) : kTintBar;
   if (panel_.round) {
     // The largest square inside the circle; the corners of the panel do not exist.
     const int side = std::min(panel_.width, panel_.height) * 707 / 1000;
@@ -266,7 +270,7 @@ void Ui::render(const UiModel& m) {
   if (!valid_ && (ox_ || oy_)) {
     // Round panel: everything outside the UI area stays the background colour.
     Canvas panel(display_.framebuffer(), panel_.width, panel_.height, panel_.swap_bytes);
-    panel.fill_rect(0, 0, panel_.width, panel_.height, kBg);
+    panel.fill_rect(0, 0, panel_.width, panel_.height, bg_);
     display_.flush(0, panel_.height);
   }
   Canvas c = canvas();
@@ -368,7 +372,7 @@ void Ui::render(const UiModel& m) {
 void Ui::draw_top(Canvas& c, const UiModel& m) {
   const int s = layout_.scale;
   const int w = info_.width;
-  c.fill_rect(0, 0, w, layout_.top_h, panel_.round ? kBg : kBar);
+  c.fill_rect(0, 0, w, layout_.top_h, panel_.round ? bg_ : bar_);
   uint16_t dot = kRed;
   const char* label = "OFFLINE";
   switch (m.link) {
@@ -457,7 +461,7 @@ void Ui::draw_indicator(Canvas& c, const UiModel& m, int cx, int cy, int r) {
     case Screen::Error: {
       c.fill_circle(cx, cy, r, kRed);
       int tw = Canvas::text_width("!", s);
-      c.text(cx - tw / 2, cy - (7 * s) / 2, "!", s, kBg);
+      c.text(cx - tw / 2, cy - (7 * s) / 2, "!", s, bg_);
       break;
     }
     case Screen::Pairing:
@@ -485,7 +489,7 @@ void Ui::draw_indicator(Canvas& c, const UiModel& m, int cx, int cy, int r) {
     case Screen::Prompt: {
       c.fill_circle(cx, cy, r, kAccent);
       int tw = Canvas::text_width("?", s);
-      c.text(cx - tw / 2, cy - (7 * s) / 2, "?", s, kBg);
+      c.text(cx - tw / 2, cy - (7 * s) / 2, "?", s, bg_);
       break;
     }
     case Screen::Image:
@@ -499,7 +503,7 @@ void Ui::draw_header(Canvas& c, const UiModel& m) {
   const int s = layout_.scale;
   const int y0 = layout_.top_h;
   const int hh = layout_.header_h;
-  c.fill_rect(0, y0, info_.width, hh, kBg);
+  c.fill_rect(0, y0, info_.width, hh, bg_);
   int r = hh / 2 - 2 * s;
   int cx = 4 * s + r;
   int cy = y0 + hh / 2;
@@ -531,7 +535,7 @@ void Ui::draw_content(Canvas& c, const UiModel& m) {
   const int y1 = info_.height - layout_.bottom_h;
   const int margin = 4 * s;
   const int lh = Canvas::line_height(s);
-  c.fill_rect(0, y0, w, y1 - y0, kBg);
+  c.fill_rect(0, y0, w, y1 - y0, bg_);
   int y = y0 + margin;
 
   if (m.color_test) {
@@ -659,7 +663,7 @@ void Ui::draw_hero(Canvas& c, const UiModel& m) {
   const int y0 = layout_.top_h;
   const int y1 = info_.height - layout_.bottom_h;
   const int lh = Canvas::line_height(s);
-  c.fill_rect(0, y0, w, y1 - y0, kBg);
+  c.fill_rect(0, y0, w, y1 - y0, bg_);
 
   const HeroGeom g = hero_geom(m);
   const int size = g.size, mx = g.x, my = g.y;
@@ -753,12 +757,12 @@ bool Ui::speaker_hit(int x, int y) const {
 
 void Ui::draw_speaker(Canvas& c, const UiModel& m, Circle at) {
   // Muted stands out, like a lit button; on is quiet.
-  c.fill_circle(at.cx, at.cy, at.r, m.muted ? kText : kBar);
+  c.fill_circle(at.cx, at.cy, at.r, m.muted ? kText : kButton);
   if (m.speaker_pressed) c.ring(at.cx, at.cy, at.r, std::max(2, layout_.scale), kAccent);
   const int gw = glyph_w(kSpeakerOn), gh = static_cast<int>(std::size(kSpeakerOn));
   const int gs = std::max(1, at.r * 6 / 5 / gw);
   const int gx = at.cx - gw * gs / 2, gy = at.cy - gh * gs / 2;
-  if (m.muted) glyph(c, gx, gy, kSpeakerMuted, gs, kBg);
+  if (m.muted) glyph(c, gx, gy, kSpeakerMuted, gs, bg_);
   else glyph(c, gx, gy, kSpeakerOn, gs, kDim);
 }
 
@@ -790,7 +794,7 @@ void Ui::draw_key_marks(Canvas& c, const UiModel& m, const HeroGeom& g) {
 void Ui::draw_bottom(Canvas& c, const UiModel& m) {
   const int s = layout_.scale;
   const int y0 = info_.height - layout_.bottom_h;
-  c.fill_rect(0, y0, info_.width, layout_.bottom_h, panel_.round ? kBg : kBar);
+  c.fill_rect(0, y0, info_.width, layout_.bottom_h, panel_.round ? bg_ : bar_);
   std::string hint = fit(m.hint, cols_for(info_.width - 4 * s - 2 * bottom_inset_, s));
   c.text((info_.width - Canvas::text_width(hint, s)) / 2, y0 + s, hint, s, kDim);
 }

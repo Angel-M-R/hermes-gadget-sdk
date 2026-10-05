@@ -143,6 +143,7 @@ class Ui {
   // Rounded corners: extra bar height above the top text and below the bottom
   // text, and how far each bar's text keeps from the side edges.
   int bar_pad_ = 0, top_inset_ = 0, bottom_inset_ = 0;
+  uint16_t bg_ = 0, bar_ = 0;  // background and bar fill: pure black on emissive panels
 };
 
 }  // namespace hg

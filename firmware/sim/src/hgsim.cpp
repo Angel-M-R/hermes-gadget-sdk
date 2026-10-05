@@ -25,6 +25,7 @@ class SimHal final : public hg::Display,
     info_.swap_bytes = false;
     info_.has_backlight = cfg.has_backlight != 0;
     info_.round = cfg.round != 0;
+    info_.emissive = cfg.emissive != 0;
     info_.corner_radius = static_cast<uint8_t>(cfg.corner_radius < 0 ? 0 : cfg.corner_radius > 255 ? 255 : cfg.corner_radius);
   }
 

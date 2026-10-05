@@ -44,6 +44,7 @@ class Board:
     power_key: tuple[str, int] | None = None  # also turns the screen off and on (Simulator.power_key)
     battery: bool = False  # a power chip reports the battery, shown in the top bar
     corner_radius: int = 0  # rounded glass corners: the screen loses them, the bars keep clear
+    emissive: bool = False  # OLED / AMOLED: the background is pure black
 
 
 BOARDS = {
@@ -54,10 +55,12 @@ BOARDS = {
     # A 1.54" 240x240 SPI LCD with codecs (e.g. Waveshare ESP32-S3-LCD-1.54): no scroll buttons.
     "sim-240x240": Board("sim-240x240", 240, 240, scroll_buttons=False),
     # A 1.75" round 466x466 AMOLED touch board (e.g. ESP32-S3-Touch-AMOLED-1.75): no scroll buttons.
-    "sim-466x466-round": Board("sim-466x466-round", 466, 466, scroll_buttons=False, round=True, touch=True),
+    "sim-466x466-round": Board("sim-466x466-round", 466, 466, scroll_buttons=False, round=True, touch=True,
+                               emissive=True),
     # A 1.8" 368x448 AMOLED touch board (e.g. ESP32-S3-Touch-AMOLED-1.8): no scroll buttons.
     "sim-368x448": Board("sim-368x448", 368, 448, scroll_buttons=False, touch=True,
-                         talk_key=("r", -100), power_key=("r", 100), battery=True, corner_radius=40),
+                         talk_key=("r", -100), power_key=("r", 100), battery=True, corner_radius=40,
+                         emissive=True),
 }
 
 
@@ -177,7 +180,7 @@ class Simulator:
             scroll_buttons=b.scroll_buttons, library=library, button_labels=button_labels,
             round_panel=b.round, touch_screen=b.touch, update_capacity=UPDATE_SLOT_BYTES,
             update_pending=update_pending, talk_key=b.talk_key, power_key=b.power_key,
-            corner_radius=b.corner_radius)
+            corner_radius=b.corner_radius, emissive=b.emissive)
         # The lit part of each row on glass that isn't rectangular; None when all of it is.
         self.glass_spans = (_circle_spans(b.width, b.height) if b.round else
                             _rounded_spans(b.width, b.height, b.corner_radius) if b.corner_radius else None)

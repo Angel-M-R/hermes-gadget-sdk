@@ -59,6 +59,7 @@ struct FakeHal : hg::Display, hg::AudioIn, hg::AudioOut, hg::Transport, hg::Stor
   int width = 320, height = 240;
   bool round = false;
   int corner_radius = 0;
+  bool emissive = false;
   bool backlight = false;
   int brightness = 0, volume = 0;
   std::vector<uint16_t> fb = std::vector<uint16_t>(320 * 240, 0);
@@ -70,6 +71,7 @@ struct FakeHal : hg::Display, hg::AudioIn, hg::AudioOut, hg::Transport, hg::Stor
     d.height = static_cast<uint16_t>(height);
     d.round = round;
     d.corner_radius = static_cast<uint8_t>(corner_radius);
+    d.emissive = emissive;
     d.has_backlight = backlight;
     return d;
   }
@@ -1234,6 +1236,21 @@ TEST("ui: rounded corners keep the bars' text and status clear of the glass edge
   for (int y = 8; y < 22 && !name_drawn; ++y)
     for (int x = 20; x < 40; ++x) name_drawn |= r.fake.fb[static_cast<size_t>(y * 368 + x)] != bar;
   CHECK(name_drawn);
+}
+
+TEST("ui: an emissive panel keeps everything around the face pure black") {
+  Rig r(Rig::touch_profile());
+  r.fake.emissive = true;
+  r.bring_online(true);
+  r.advance(200);
+  CHECK(r.app.model().hero);
+  CHECK_EQ(r.fake.fb[static_cast<size_t>(1 * 320 + 160)], uint16_t(0));    // top bar, above its text
+  CHECK_EQ(r.fake.fb[static_cast<size_t>(100 * 320 + 310)], uint16_t(0));  // beside the face
+  CHECK_EQ(r.fake.fb[static_cast<size_t>(238 * 320 + 2)], uint16_t(0));                            // bottom bar
+  CHECK(r.fake.fb[static_cast<size_t>(54 * 320 + 32)] != 0);  // the speaker button stays visible
+  size_t lit = 0;
+  for (uint16_t px : r.fake.fb) lit += px != 0;
+  CHECK(lit > 2000);  // the face and the text are still drawn
 }
 
 TEST("power: idle screen dims, sleeps and consumes the wake input without recording") {

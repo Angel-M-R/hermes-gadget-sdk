@@ -57,6 +57,8 @@ Implement `hg::Display` (`firmware/core/include/hg/hal.hpp`):
 
 **Rounded corners** (for example the 1.8" 368×448 AMOLED, radius about 40 px): set `corner_radius`. The top and bottom bars grow slightly and keep their text clear of the curve.
 
+**OLED and AMOLED panels**: set `emissive = true`. An unlit pixel draws no power there, so the UI paints its background and bars pure black instead of a dark tint; the face, text and controls are the only pixels lit.
+
 - **Monochrome or e-paper:** convert RGB565 to your format in `flush()`. The UI uses dark backgrounds with light text and accents, so thresholding the luminance works.
 - **Very small screens** (128×64): the layout scales text to 1×. You may want a slimmer layout; `Ui` reads only `DisplayInfo`.
 

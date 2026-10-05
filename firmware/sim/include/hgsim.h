@@ -91,6 +91,7 @@ typedef struct hgsim_config {
   int talk_key_edge, talk_key_dy;
   int power_key_edge, power_key_dy;
   int corner_radius; /* rounded glass corners in pixels (see hg::DisplayInfo::corner_radius) */
+  int emissive;      /* OLED / AMOLED: the UI keeps its background pure black (hg::DisplayInfo::emissive) */
 } hgsim_config;
 
 /* Action handler: fill `result_json` (a JSON object) and return 1, or write an
