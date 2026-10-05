@@ -28,6 +28,10 @@ Optional Linux audio uses python-sounddevice (MIT, Matthias Geier) and the
 system PortAudio library (MIT). Raspberry Pi controls use GPIO Zero
 (BSD-3-Clause) and the system lgpio library (Unlicense). These dependencies are
 installed separately; their packages carry their respective license texts.
+The plugin declares piper-tts (GPL-3.0) as a separately installed dependency
+for its initial Davefx Spain voice (es_ES-davefx-medium). The voice model is
+fetched by Hermes on first use; neither engine source nor model weights are
+copied into the SDK. The model card identifies the OHF-Voice corpus as CC0.
 The optional Linux display uses pygame (LGPL 2.1) and SDL2 (zlib), also
 installed separately. No pygame or SDL source is copied into this repository.
 
