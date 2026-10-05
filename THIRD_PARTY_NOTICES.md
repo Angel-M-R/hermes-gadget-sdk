@@ -14,6 +14,7 @@ The dependencies below keep their own licenses and are downloaded when you build
 | Espressif [ILI9341 display](https://components.espressif.com/components/espressif/esp_lcd_ili9341), [GT911](https://components.espressif.com/components/espressif/esp_lcd_touch_gt911) and [TT21100](https://components.espressif.com/components/espressif/esp_lcd_touch_tt21100) touch drivers | BOX-3 display revisions and touch | Apache 2.0 |
 | Espressif [FT5x06 touch](https://components.espressif.com/components/espressif/esp_lcd_touch_ft5x06) driver | CoreS3 touch; ILI9341 and esp_codec_dev also provide its display and AW88298 audio drivers | Apache 2.0 |
 | [esptool-js](https://github.com/espressif/esptool-js) | Flashing from the browser installer, added to the site when it's built | Apache 2.0 |
+| [edge-tts](https://github.com/rany2/edge-tts) | Plugin dependency for the initial Ximena Spain voice; installed separately by Hermes, no source or voice models included | LGPL-3.0 |
 | Python packages (`websockets`, and optionally `Pillow`, `sounddevice`, `pyserial`) | Plugin, simulator and tools | Their own licenses; see each project |
 | [GPIO Zero](https://github.com/gpiozero/gpiozero/blob/master/LICENSE.rst) | Optional Raspberry Pi buttons and digital outputs | BSD 3-Clause |
 | [pygame](https://github.com/pygame/pygame/blob/main/docs/LGPL.txt), [SDL2](https://github.com/libsdl-org/SDL/blob/SDL2/LICENSE.txt) | Optional Linux device display | LGPL 2.1; zlib for SDL2 |

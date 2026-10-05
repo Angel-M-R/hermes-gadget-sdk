@@ -129,3 +129,9 @@ def test_provision_refuses_what_the_console_would_drop(monkeypatch, capsys):
     assert _provision(monkeypatch, board, wifi_ssid="Café", wifi_pass="secret") == 2
     assert board.settings == {}
     assert "wifi_ssid: the board's console only takes printable ASCII" in capsys.readouterr().err
+
+
+def test_plugin_install_directs_users_through_voice_setup(tmp_path, capsys):
+    assert cli.main(["plugin", "install", "--hermes-home", str(tmp_path)]) == 0
+    assert (tmp_path / "plugins" / "gadget" / "setup.py").is_file()
+    assert "hermes gateway setup" in capsys.readouterr().out

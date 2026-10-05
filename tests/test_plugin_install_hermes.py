@@ -15,7 +15,7 @@ from conftest import REPO, requires_hermes
 
 pytestmark = requires_hermes
 
-SOURCE = "https://github.com/Adolanium/hermes-gadget-sdk.git#plugin"
+SOURCE = "https://github.com/Angel-M-R/hermes-gadget-sdk.git#plugin"
 
 
 def test_hermes_lets_the_plugin_install_from_github(tmp_path):
@@ -27,3 +27,11 @@ def test_hermes_lets_the_plugin_install_from_github(tmp_path):
     allowed, reason = should_allow_install(result)
     assert result.trust_level == "community"
     assert allowed is True, f"{reason}\n{format_scan_report(result)}"
+
+
+def test_hermes_recognizes_the_declared_initial_voice_engine():
+    from pm.plugin_declarations import read_python_declaration
+
+    declaration = read_python_declaration(REPO / "plugin")
+    assert declaration.is_member is True
+    assert "edge-tts>=7.2.8,<8" in declaration.install_requirements

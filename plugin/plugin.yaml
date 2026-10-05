@@ -12,6 +12,8 @@ description: >
   actions (LEDs, relays, displays) through the gadget tools.
 author: Hermes Gadget SDK contributors
 license: MIT
+python_dependencies:
+  - "edge-tts>=7.2.8,<8"
 tags: [gateway, hardware, esp32, voice, iot]
 provides_tools:
   - gadget_devices

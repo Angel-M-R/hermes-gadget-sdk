@@ -11,6 +11,7 @@ from hermes_gadget_plugin import cli, setup
 
 DESK, KITCHEN = "hg-0123456789abcdef", "hg-fedcba9876543210"
 SERVER = "ws://192.168.1.20:8765/gadget"
+VOICE_SETTINGS = [("tts.edge.voice", "es-ES-XimenaNeural"), ("tts.provider", "edge")]
 
 
 def test_the_installer_link_carries_the_server_in_the_fragment():
@@ -20,7 +21,8 @@ def test_the_installer_link_carries_the_server_in_the_fragment():
     assert fragment.startswith("server=") and unquote(fragment[len("server="):]) == SERVER
 
 
-def _setup(monkeypatch, answer: str, extra: dict, *, writable: bool = True):
+def _setup(monkeypatch, answer: str, extra: dict, *, writable: bool = True,
+           tts: dict | None = None, readable: bool = True):
     writes, shown = [], []
 
     def prompt(question, default=None, password=False):
@@ -29,6 +31,8 @@ def _setup(monkeypatch, answer: str, extra: dict, *, writable: bool = True):
 
     monkeypatch.setattr(setup, "_ui", lambda: (shown.append, shown.append, shown.append, shown.append, prompt))
     monkeypatch.setattr(setup, "_set_config", lambda key, value: writes.append((key, value)) or writable)
+    stock = {"provider": "edge", "edge": {"voice": "en-US-AriaNeural"}}
+    monkeypatch.setattr(setup, "_current_tts", lambda: (tts or {}, stock) if readable else None)
     monkeypatch.setattr(cli, "_gadget_extra", lambda: dict(extra))
     monkeypatch.setattr(cli, "_lan_address", lambda: "192.168.1.20")
     setup.interactive_setup()
@@ -37,7 +41,7 @@ def _setup(monkeypatch, answer: str, extra: dict, *, writable: bool = True):
 
 def test_setup_enables_the_platform_and_points_at_the_installer(monkeypatch):
     writes, shown = _setup(monkeypatch, "", {})
-    assert writes == [("platforms.gadget.enabled", "true")]
+    assert writes == [("platforms.gadget.enabled", "true"), *VOICE_SETTINGS]
     assert "Port devices connect to [8765]" in shown
     assert f"  {cli.installer_link(SERVER)}" in shown
     assert any("hermes gadget pair" in line for line in shown)
@@ -45,11 +49,11 @@ def test_setup_enables_the_platform_and_points_at_the_installer(monkeypatch):
 
 def test_setup_writes_a_changed_port_and_keeps_the_old_one_for_nonsense(monkeypatch):
     writes, shown = _setup(monkeypatch, "9000", {})
-    assert writes == [("platforms.gadget.enabled", "true"), ("platforms.gadget.extra.port", "9000")]
+    assert writes == [("platforms.gadget.enabled", "true"), ("platforms.gadget.extra.port", "9000"), *VOICE_SETTINGS]
     assert "Devices connect to ws://192.168.1.20:9000/gadget" in shown
 
     writes, shown = _setup(monkeypatch, "http", {"port": 8800})
-    assert writes == [("platforms.gadget.enabled", "true")]
+    assert writes == [("platforms.gadget.enabled", "true"), *VOICE_SETTINGS]
     assert "'http' isn't a port number; keeping 8800" in shown
     assert "Devices connect to ws://192.168.1.20:8800/gadget" in shown
 
@@ -57,6 +61,32 @@ def test_setup_writes_a_changed_port_and_keeps_the_old_one_for_nonsense(monkeypa
 def test_setup_says_what_to_run_when_it_cannot_write_the_config(monkeypatch):
     _, shown = _setup(monkeypatch, "", {}, writable=False)
     assert any("hermes config set platforms.gadget.enabled true" in line for line in shown)
+    assert any(f"hermes config set {VOICE_SETTINGS[0][0]} {VOICE_SETTINGS[0][1]}" in line for line in shown)
+    assert not any("Initial voice:" in line for line in shown)
+
+
+def test_setup_replaces_the_seeded_hermes_voice_and_reports_the_default(monkeypatch):
+    writes, shown = _setup(monkeypatch, "", {}, tts={"provider": "edge", "edge": {"voice": "en-US-AriaNeural"}})
+    assert writes[-2:] == VOICE_SETTINGS
+    assert any(f"Initial voice: {setup.DEFAULT_TTS_NAME}" in line for line in shown)
+    assert any("including other chats" in line for line in shown)
+
+
+@pytest.mark.parametrize("tts", [
+    {"provider": "edge", "edge": {"voice": "es-ES-ElviraNeural", "speed": 1.2}},
+    {"provider": "piper", "piper": {"voice": "es_ES-davefx-medium"}},
+    {"provider": "openai", "openai": {"voice": "nova"}},
+])
+def test_setup_preserves_a_selected_voice_or_provider(monkeypatch, tts):
+    writes, shown = _setup(monkeypatch, "", {}, tts=tts)
+    assert writes == [("platforms.gadget.enabled", "true")]
+    assert "Keeping your configured speech provider and voice." in shown
+
+
+def test_setup_does_not_overwrite_speech_when_config_cannot_be_read(monkeypatch):
+    writes, shown = _setup(monkeypatch, "", {}, readable=False)
+    assert writes == [("platforms.gadget.enabled", "true")]
+    assert any("current voice was left unchanged" in line for line in shown)
 
 
 class FakeDevices:

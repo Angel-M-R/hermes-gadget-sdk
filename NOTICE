@@ -28,6 +28,9 @@ Optional Linux audio uses python-sounddevice (MIT, Matthias Geier) and the
 system PortAudio library (MIT). Raspberry Pi controls use GPIO Zero
 (BSD-3-Clause) and the system lgpio library (Unlicense). These dependencies are
 installed separately; their packages carry their respective license texts.
+The plugin declares edge-tts (LGPL-3.0) as a separately installed dependency
+for its initial Ximena voice, synthesized through Microsoft's Edge service.
+Neither edge-tts source nor Microsoft voice models are copied into the SDK.
 The optional Linux display uses pygame (LGPL 2.1) and SDL2 (zlib), also
 installed separately. No pygame or SDL source is copied into this repository.
 
