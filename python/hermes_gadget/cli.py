@@ -319,6 +319,13 @@ def cmd_console(args) -> int:
 
 # -- face -----------------------------------------------------------------------------------
 
+def _face_size(value: str) -> int:
+    size = int(value)
+    if not 16 <= size <= 512:
+        raise argparse.ArgumentTypeError(f"{size} px: a face size must be 16..512")
+    return size
+
+
 def cmd_face(args) -> int:
     try:
         from . import face
@@ -355,7 +362,8 @@ def cmd_face(args) -> int:
         eye_grow=args.eye_grow, mouth_grow=args.mouth_grow,
         mouth_x=args.mouth_x, mouth_y=args.mouth_y, mouth_w=args.mouth_w, mouth_h=args.mouth_h,
         ear_cup=tuple(args.ear_cup), think_dot=tuple(args.think_dot),
-        listen_waves=args.listen_waves, talk_waves=args.talk_waves)
+        listen_waves=args.listen_waves, talk_waves=args.talk_waves,
+        sizes=tuple(sorted(set(args.sizes))) if args.sizes else face.SIZES)
     face.write_face(image, opts, out=out, preview_path=preview_path, check_path=check_path,
                     want_report=args.report)
     return 0
@@ -475,6 +483,8 @@ def build_parser() -> argparse.ArgumentParser:
                    metavar=("X", "Y"), help="Where the listening waves start")
     f.add_argument("--think-dot", type=float, nargs=2, default=(0.82, 0.11),
                    metavar=("X", "Y"), help="Where the thinking dots go")
+    f.add_argument("--sizes", type=_face_size, nargs="+", metavar="PX", help="Pixel sizes to build (default 64 96 144 192); "
+                   "a larger screen draws the largest that fits")
     f.add_argument("--listen-waves", choices=("left", "right"), default="right",
                    help="Which way the listening waves face (the mascot's: right)")
     f.add_argument("--talk-waves", choices=("left", "right"), default="left",
