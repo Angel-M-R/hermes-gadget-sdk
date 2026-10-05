@@ -259,6 +259,8 @@ extern "C" void app_main(void) {
     }
     g_buttons.poll(app);
     g_wifi.tick(app, g_system.now_ms());
+    // Keep Wi-Fi awake while audio plays so streaming replies arrive smoothly.
+    g_wifi.set_low_latency(hal.speaker && hal.speaker->busy());
     if (g_gestures) g_gestures->tick(g_system.now_ms());
     app.tick();
   }

@@ -34,6 +34,13 @@ void Wifi::begin(NvsStorage& storage) {
   ESP_ERROR_CHECK(esp_wifi_start());
 }
 
+void Wifi::set_low_latency(bool on) {
+  if (on == low_latency_) return;
+  low_latency_ = on;
+  esp_wifi_set_ps(on ? WIFI_PS_NONE : WIFI_PS_MIN_MODEM);
+  ESP_LOGI("hg.wifi", "modem sleep %s", on ? "off (streaming audio)" : "on");
+}
+
 void Wifi::join(const char* ssid, const char* password) {
   configured_ = false;
   retry_at_ = 0;

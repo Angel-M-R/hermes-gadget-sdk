@@ -377,6 +377,9 @@ class Wifi {
   std::string start_setup();
   void stop_setup();
   void provision(const hg::WifiCredentials& credentials);
+  // Wi-Fi modem sleep adds latency spikes that break up streaming audio; turn
+  // it off while the speaker is active and restore it when idle.
+  void set_low_latency(bool on);
 
  private:
   static void on_event(void* arg, const char* base, int32_t id, void* data);
@@ -385,6 +388,7 @@ class Wifi {
   void setup_status(std::string status);
   NvsStorage* storage_ = nullptr;
   bool configured_ = false;
+  bool low_latency_ = false;
   bool auto_setup_ = false, auto_setup_tried_ = false;
   bool joining_ = false, wait_disconnect_ = false;
   uint32_t retry_at_ = 0, trial_at_ = 0, setup_until_ = 0, close_at_ = 0;
