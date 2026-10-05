@@ -42,6 +42,12 @@ assets/mascot/nous-girl-white-1024.png, the mascot bitmaps generated from it
 https://github.com/NousResearch/hermes-agent, released under the MIT License,
 Copyright (c) 2025 Nous Research.
 
+assets/faces/knight-dragon.webp and the face generated from it
+(firmware/core/faces/knight_dragon.cpp) are artwork supplied by this fork's
+owner for their own device. They are not part of the upstream project and are
+not covered by its MIT license; builds use them only when CONFIG_HG_FACE or
+HG_FACE selects "knight_dragon".
+
 The CO5300 panel start-up commands in firmware/esp32/main/port_amoled.cpp (the
 register values and their order) follow Waveshare's board support package for
 the ESP32-S3-Touch-AMOLED-1.75,

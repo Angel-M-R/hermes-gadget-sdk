@@ -18,3 +18,5 @@ CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
 # CONFIG_ESP_CONSOLE_UART_DEFAULT is not set
 CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
 CONFIG_HG_BOARD_AMOLED_18=y
+# The knight-and-dragon face (firmware/core/faces/knight_dragon.cpp, from assets/faces/).
+CONFIG_HG_FACE="knight_dragon"

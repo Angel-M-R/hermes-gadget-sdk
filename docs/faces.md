@@ -159,10 +159,18 @@ and the blink is a flicker nobody notices.
 Generate into `firmware/core/faces/<name>.cpp` instead of over the mascot, and choose it at
 build time: `CONFIG_HG_FACE="<name>"` in a board's `sdkconfig.defaults` (or `idf.py
 menuconfig` → **Hermes Gadget** → **Face**), and `cmake -DHG_FACE=<name>` for the simulator's
-library. Every other build keeps the shipped mascot, and `mascot_data.cpp` stays as it ships,
-so updates to the project merge cleanly. PlatformIO keeps `firmware/esp32/sdkconfig.<env>`
-between builds: delete it after changing the face in `sdkconfig.defaults`, or the old face is
-built again.
+library. PlatformIO keeps `firmware/esp32/sdkconfig.<env>` between builds, so delete it after
+changing the face in `sdkconfig.defaults`, or the old face is built again. Every other build keeps the shipped mascot, and `mascot_data.cpp` stays as it ships,
+so updates to the project merge cleanly. The AMOLED-1.8 profile in this fork builds
+`knight_dragon`, made from `assets/faces/knight-dragon.webp` with:
+
+```
+hermes-gadget face assets/faces/knight-dragon.webp --mask bright \
+  --eye-left 0.7195 0.4559 0.1047 0.0410 --eye-right 0.8242 0.4703 0.1047 0.0471 --eye-grow 1.15 \
+  --mouth-x 0.816 --mouth-y 0.616 --mouth-w 0.148 --mouth-h 0.037 \
+  --ear-cup 1.004 0.590 --think-dot 0.96 0.088 --talk-waves right --sizes 64 96 144 192 288 \
+  --out firmware/core/faces/knight_dragon.cpp --report
+```
 
 ## Putting the mascot back
 
