@@ -183,10 +183,15 @@ void I2sSpeaker::task(void* arg) {
     // milliseconds, not ticks.
     const size_t total = n * sizeof(int16_t);
     size_t offset = 0;
-    while (offset < total) {
+    while (offset < total && !self->flush_.load()) {  // an abort drops the rest at once
       size_t written = 0;
-      i2s_channel_write(self->tx_, reinterpret_cast<uint8_t*>(chunk) + offset, total - offset, &written, 200);
-      if (written == 0) break;
+      const esp_err_t err =
+          i2s_channel_write(self->tx_, reinterpret_cast<uint8_t*>(chunk) + offset, total - offset, &written, 200);
+      if (written == 0) {
+        ESP_LOGW(TAG, "speaker stalled (%s), dropped %u bytes", esp_err_to_name(err),
+                 static_cast<unsigned>(total - offset));
+        break;
+      }
       offset += written;
     }
   }

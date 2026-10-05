@@ -448,7 +448,8 @@ class Simulator:
 
     def power_key(self) -> None:
         """A short press of the power key (boards with one): the screen goes off, or back on."""
-        self.device.power_key()
+        if self.board.power_key:
+            self.device.power_key()
 
     def console(self, line: str) -> str:
         return self.device.console(line)
@@ -499,4 +500,6 @@ class Simulator:
         p.battery = max(5.0, p.battery - 0.02)
         p.temperature_c = round(p.temperature_c + random.uniform(-0.05, 0.05), 2)
         self.device.set_sensor("battery_pct", round(p.battery))
+        if self.board.battery:
+            self.device.set_power(round(p.battery))  # the top bar and status follow the same charge
         self.device.set_sensor("temperature_c", p.temperature_c)

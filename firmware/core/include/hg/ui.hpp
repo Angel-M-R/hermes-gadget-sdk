@@ -146,6 +146,7 @@ class Ui {
   bool hero_valid_ = false;
   bool valid_ = false;
   Circle speaker_;  // as last drawn, for speaker_hit
+  bool speaker_in_header_ = false;  // its touch area ends with the header band
   std::string qr_text_;  // what qr_ encodes, so a code is built once
   QrCode qr_;
   // Rounded corners: extra bar height above the top text and below the bottom

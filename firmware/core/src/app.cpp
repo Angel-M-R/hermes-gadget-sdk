@@ -838,7 +838,7 @@ bool App::speaker_button_hit(int x, int y) const {
 }
 
 void App::on_speaker_button(SpeakerTouch touch) {
-  speaker_pressed_ = touch == SpeakerTouch::Down;
+  speaker_pressed_ = touch == SpeakerTouch::Down || touch == SpeakerTouch::Hold;
   if (touch == SpeakerTouch::Hold) {
     muted_ = !muted_;
     if (hal_.storage) hal_.storage->set("mute", muted_ ? "1" : "0");

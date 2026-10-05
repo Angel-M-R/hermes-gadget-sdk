@@ -114,7 +114,8 @@ class App {
   // from Hermes still wakes it.
   void on_power_key();
   // The on-screen speaker button (touch screens with a speaker): holding it
-  // mutes or unmutes, a tap only says so. TouchGestures reports the touch.
+  // mutes or unmutes, a tap only says so. TouchGestures reports the touch;
+  // Leave is the finger sliding off, or lifting after a hold.
   enum class SpeakerTouch : uint8_t { Down, Hold, Tap, Leave };
   bool speaker_button_hit(int x, int y) const;
   void on_speaker_button(SpeakerTouch touch);

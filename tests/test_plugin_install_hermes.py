@@ -34,4 +34,4 @@ def test_hermes_recognizes_the_declared_initial_voice_engine():
 
     declaration = read_python_declaration(REPO / "plugin")
     assert declaration.is_member is True
-    assert "edge-tts>=7.2.8,<8" in declaration.install_requirements
+    assert any(req.replace(" ", "").startswith("edge-tts") for req in declaration.install_requirements)

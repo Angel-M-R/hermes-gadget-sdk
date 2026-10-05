@@ -148,6 +148,7 @@ void App::settings_tick() {
   }
   if (hardware_check_ == HardwareCheck::Speaker && !hal_.speaker->busy()) {
     hardware_check_ = HardwareCheck::None;
+    apply_volume();  // the tone played at the saved volume even if muted
     check_result_ = "Tone finished. Did you hear it?";
     update_model();
   }
@@ -166,7 +167,7 @@ void App::settings_model() {
       m.detail = "Speaker volume";
       m.body = !hal_.speaker ? "No speaker driver is active."
                : muted_       ? std::to_string(volume_) + "%, muted\n" +
-                                    (profile_.touch_screen ? "Hold the speaker icon to unmute." : "Console: set mute 0")
+                                    (profile_.touch_screen ? "Leave settings, then hold the speaker icon to unmute." : "Console: set mute 0")
                               : std::to_string(volume_) + "%\nChanges are saved.";
       break;
     case Menu::Brightness:

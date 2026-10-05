@@ -179,7 +179,7 @@ def test_wave_directions_are_written_only_when_they_differ_from_the_mascots(tmp_
     assert anchors("--listen-waves", "left").endswith(", -1, -1")
 
 
-def test_a_face_can_add_a_size_for_a_larger_screen(tmp_path):
+def test_a_face_can_add_a_size_for_a_larger_screen(tmp_path, capsys):
     Image = pytest.importorskip("PIL.Image")
     src = tmp_path / "face.png"
     img = Image.new("RGB", (128, 128), (0, 0, 0))
@@ -193,8 +193,10 @@ def test_a_face_can_add_a_size_for_a_larger_screen(tmp_path):
     found = arrays(out.read_text())
     assert sorted(found) == sorted(f"k{f}{s}" for f in ("Idle", "Blink", "Talk") for s in (64, 288))
     assert len(found["kIdle288"]) == 288 * 288 // 8
+    capsys.readouterr()
     with pytest.raises(SystemExit):
-        cli.main(["face", str(src), "--sizes", "600", "--out", str(out)])
+        cli.main(["face", str(src), "--mask", "bright", "--sizes", "600", "--out", str(out)])
+    assert "16..512" in capsys.readouterr().err
 
 
 def test_the_command_wants_both_eyes_or_neither(tmp_path):

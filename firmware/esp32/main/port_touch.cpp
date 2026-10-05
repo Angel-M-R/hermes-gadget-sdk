@@ -180,12 +180,13 @@ bool TouchInput::read_key(bool& pressed) {
 void TouchInput::task(void* arg) {
   auto* self = static_cast<TouchInput*>(arg);
   bool was_touching = false, key_down = false;
-  TickType_t retry_at = 0;  // after a failed sleep or wake
-  bool warned = false;
+  bool failed = false;     // the last sleep or wake didn't take
+  TickType_t retry_at = 0;  // ...so wait until then; compared only while failed
   for (;;) {
     const bool sleep = self->sleep_wanted_;
+    if (sleep == self->asleep_) failed = false;  // nothing left to retry
     if (sleep != self->asleep_ && self->can_sleep() &&
-        static_cast<int32_t>(xTaskGetTickCount() - retry_at) >= 0) {
+        (!failed || static_cast<int32_t>(xTaskGetTickCount() - retry_at) >= 0)) {
       if (sleep && was_touching) {
         // The finger is lifted for the app before the controller goes quiet.
         TouchSample up{};
@@ -197,12 +198,12 @@ void TouchInput::task(void* arg) {
                               : self->reset_cst820();
       if (done) {
         self->asleep_ = sleep;
-        warned = false;
+        failed = false;
       } else {
         // Stay as it was and try again: a wake that failed would leave touch dead.
         retry_at = xTaskGetTickCount() + pdMS_TO_TICKS(1000);
-        if (!warned) ESP_LOGW(TAG, "touch controller did not %s; retrying", sleep ? "sleep" : "wake");
-        warned = true;
+        if (!failed) ESP_LOGW(TAG, "touch controller did not %s; retrying", sleep ? "sleep" : "wake");
+        failed = true;
       }
     }
     TouchSample s{};

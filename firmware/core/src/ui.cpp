@@ -278,9 +278,9 @@ void Ui::render(const UiModel& m) {
   const int y_content = y_header + layout_.header_h;
   const int y_bottom = h - layout_.bottom_h;
 
-  // A round panel's corners and header ends are too close to the glass edge for the button.
-  const bool speaker = m.speaker_button && !panel_.round && conversation(m.screen);
+  const bool speaker = m.speaker_button && conversation(m.screen);
   speaker_ = speaker ? (m.hero ? hero_speaker(m) : header_speaker(m)) : Circle{};
+  speaker_in_header_ = speaker && !m.hero;
 
   uint32_t hashes[4];
   hashes[0] = Hash().add(m.title).val(m.link).val(m.battery).val(m.charging).val(m.usb_power).get();
@@ -820,8 +820,9 @@ bool Ui::speaker_hit(int x, int y) const {
   if (!speaker_.r) return false;
   const int lx = x - ox_, ly = y - oy_;
   const int reach = speaker_.r + 6 * layout_.scale;  // fingers are wider than the icon
-  // Never steal the title bar: holding it opens the settings.
-  return ly >= layout_.top_h && std::abs(lx - speaker_.cx) <= reach && std::abs(ly - speaker_.cy) <= reach;
+  // Never steal the title bar (holding it opens the settings), nor the text under the header.
+  if (ly < layout_.top_h || (speaker_in_header_ && ly >= layout_.top_h + layout_.header_h)) return false;
+  return std::abs(lx - speaker_.cx) <= reach && std::abs(ly - speaker_.cy) <= reach;
 }
 
 void Ui::draw_speaker(Canvas& c, const UiModel& m, Circle at) {

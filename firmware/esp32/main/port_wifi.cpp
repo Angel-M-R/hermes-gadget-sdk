@@ -36,8 +36,15 @@ void Wifi::begin(NvsStorage& storage) {
 
 void Wifi::set_low_latency(bool on) {
   if (on == low_latency_) return;
+  // Called every loop: a mode Wi-Fi refused is tried again next time, with one warning.
+  const esp_err_t err = esp_wifi_set_ps(on ? WIFI_PS_NONE : WIFI_PS_MIN_MODEM);
+  if (err != ESP_OK) {
+    if (!ps_warned_) ESP_LOGW("hg.wifi", "modem sleep unchanged: %s", esp_err_to_name(err));
+    ps_warned_ = true;
+    return;
+  }
   low_latency_ = on;
-  esp_wifi_set_ps(on ? WIFI_PS_NONE : WIFI_PS_MIN_MODEM);
+  ps_warned_ = false;
   ESP_LOGI("hg.wifi", "modem sleep %s", on ? "off (streaming audio)" : "on");
 }
 

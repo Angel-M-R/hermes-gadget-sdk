@@ -138,8 +138,8 @@ A logo or an object, with nothing to blink, can be generated as a still picture 
 - **A face looking right**, where the space for the waves is in front of it: `--talk-waves
   right`, with `--mouth-*` and `--ear-cup` near the front edge of the drawing.
 - **A large screen**: the UI draws the largest size that fits, so a 368x448 panel has room
-  for more than 192 px. `--sizes 64 96 144 192 288` adds one; each 288 px frame costs about
-  10 KB of flash.
+  for more than 192 px. `--sizes 64 96 144 192 288` adds one. Each size has three frames (idle,
+  blink and talk), so 288 px costs about 31 KB of flash.
 - **No eyes at all**, like a closed helmet: anything that reads as an eye can blink. A visor
   slit given as `--eye-left` and `--eye-right`, one box per half, closes to a thin line with
   the default `--blink light`.
@@ -197,7 +197,9 @@ menuconfig` → **Hermes Gadget** → **Face**), and `cmake -DHG_FACE=<name>` fo
 library. Every other build keeps the shipped mascot, and `mascot_data.cpp` stays as it ships,
 so updates to the project merge cleanly. PlatformIO keeps `firmware/esp32/sdkconfig.<env>`
 between builds: delete it after changing the face in `sdkconfig.defaults`, or the old face is
-built again.
+built again. Firmware builds take the face from `CONFIG_HG_FACE` alone. The simulator's build
+directory remembers `-DHG_FACE` until you change it: configure it with `-DHG_FACE=` to go back
+to the mascot.
 
 ## Putting the mascot back
 

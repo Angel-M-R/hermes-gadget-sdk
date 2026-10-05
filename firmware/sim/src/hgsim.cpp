@@ -152,6 +152,7 @@ class SimUpdater final : public hg::Updater {
 class SimPower final : public hg::Power {
  public:
   std::optional<hg::PowerStatus> read() override { return status; }
+  bool can_power_off() const override { return false; }  // a window can't switch itself off
   bool power_off() override { return false; }
   hg::PowerStatus status;
 };

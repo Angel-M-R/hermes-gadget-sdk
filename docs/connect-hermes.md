@@ -25,7 +25,7 @@ gadget. Ximena needs internet when generating new speech; no API key is needed.
 
 **You know it worked when:** `hermes gadget info` shows the gadget configuration and device URL. Keep the gateway running so devices can connect.
 
-The command resolves the latest commit on `main` and installs that revision. To match a firmware release, use the command in the [release notes](https://github.com/Adolanium/hermes-gadget-sdk/releases), which pins the plugin with `--ref`.
+The command resolves the latest commit on `main` of `Angel-M-R/hermes-gadget-sdk` and installs that revision. To pin another revision, set `HERMES_GADGET_REF` to a commit of the same repository.
 
 ## 2. Connect a device
 

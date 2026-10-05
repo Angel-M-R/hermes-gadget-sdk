@@ -3,11 +3,12 @@
 # The face: the shipped mascot, or faces/<name>.cpp from `hermes-gadget face`,
 # chosen with CONFIG_HG_FACE (ESP-IDF) or -DHG_FACE=<name> (host builds).
 set(HG_FACE "" CACHE STRING "Face to build from faces/<name>.cpp; empty for the shipped mascot")
-set(HG_FACE_NAME "${HG_FACE}")
-if(ESP_PLATFORM AND NOT "${CONFIG_HG_FACE}" STREQUAL "")
+if(ESP_PLATFORM)
   set(HG_FACE_NAME "${CONFIG_HG_FACE}")
+else()
+  set(HG_FACE_NAME "${HG_FACE}")
 endif()
-if(HG_FACE_NAME)
+if(NOT "${HG_FACE_NAME}" STREQUAL "")
   set(HG_FACE_SOURCE faces/${HG_FACE_NAME}.cpp)
   if(NOT EXISTS "${CMAKE_CURRENT_LIST_DIR}/${HG_FACE_SOURCE}")
     message(FATAL_ERROR "No face '${HG_FACE_NAME}': expected ${CMAKE_CURRENT_LIST_DIR}/${HG_FACE_SOURCE}")

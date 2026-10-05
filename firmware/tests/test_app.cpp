@@ -1209,6 +1209,72 @@ TEST("touch: a long reply carries the speaker button in its header") {
   CHECK(!r.app.model().hero);
   CHECK(!r.app.speaker_button_hit(32, 54));  // the indicator lives there now
   CHECK(r.app.speaker_button_hit(300, 42));
+  CHECK(r.app.speaker_button_hit(300, 55));
+  CHECK(!r.app.speaker_button_hit(300, 60));  // the reply's first line, under the header
+}
+
+TEST("touch: the speaker button stays pressed through a hold, and a swipe from it still cancels") {
+  Rig r(Rig::touch_profile());
+  r.bring_online(true);
+  hg::TouchGestures touch(r.app);
+  touch.update(true, 32, 54, r.fake.clock);
+  r.advance(460);
+  touch.tick(r.fake.clock);
+  CHECK(r.app.muted());
+  CHECK(r.app.model().speaker_pressed);  // the finger is still on it
+  touch.update(false, 0, 0, r.fake.clock);
+  CHECK(!r.app.model().speaker_pressed);
+
+  // The app's clock passes 0.4 s while the lift is still on its way: still a tap.
+  touch.update(true, 32, 54, r.fake.clock);
+  r.advance(410);
+  touch.tick(r.fake.clock);
+  touch.update(false, 0, 0, r.fake.clock);
+  CHECK(r.app.muted());
+  CHECK_EQ(r.app.model().hint, std::string("Hold the speaker to unmute"));
+
+  // Swiping down from the button is the cancel swipe, as anywhere else.
+  r.app.submit_text("What's the weather?");
+  CHECK(r.app.screen() == hg::Screen::Thinking);
+  touch.update(true, 32, 54, r.fake.clock);
+  touch.update(true, 34, 100, r.fake.clock);
+  touch.update(true, 35, 130, r.fake.clock);
+  touch.update(false, 0, 0, r.fake.clock);
+  CHECK(r.fake.last("cancel") != nullptr);
+  CHECK(r.app.muted());
+  CHECK(!r.app.model().speaker_pressed);
+}
+
+TEST("touch: a round screen keeps its speaker button inside the glass") {
+  Rig r(Rig::touch_profile());
+  r.fake.make_round(466);
+  r.bring_online(true);
+  CHECK(r.app.model().speaker_button);
+  CHECK(r.app.speaker_button_hit(112, 134));  // the mascot screen's button, top left of the square
+  const uint16_t bg = r.fake.fb[static_cast<size_t>(233 * 466)];
+  int stray = 0;
+  for (int y = 0; y < 466; ++y)
+    for (int x = 0; x < 466; ++x) {
+      const int dx = 2 * x + 1 - 466, dy = 2 * y + 1 - 466;
+      if (dx * dx + dy * dy > 466 * 466) stray += r.fake.fb[static_cast<size_t>(y * 466 + x)] != bg;
+    }
+  CHECK_EQ(stray, 0);
+}
+
+TEST("settings: a speaker check that ends by itself keeps a muted speaker muted") {
+  Rig r;
+  r.bring_online(true);
+  CHECK_EQ(r.app.console("set mute 1"), std::string("@ok mute"));
+  CHECK_EQ(r.fake.volume, 0);
+  CHECK(r.app.open_settings());
+  for (int i = 0; i < 4; ++i) r.app.console("cancel");
+  CHECK_EQ(r.app.model().detail, std::string("Speaker check"));
+  r.app.console("talk");
+  r.app.console("release");
+  CHECK_EQ(r.fake.volume, 70);  // the tone is heard even while muted
+  r.advance(20);
+  CHECK(r.app.model().body.find("Tone finished") != std::string::npos);
+  CHECK_EQ(r.fake.volume, 0);
 }
 
 TEST("power key: turns the screen off and on; replies keep it off, a question wakes it") {

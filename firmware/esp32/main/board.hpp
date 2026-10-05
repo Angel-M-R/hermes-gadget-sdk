@@ -54,7 +54,7 @@ struct AmoledConfig {
   int gap_x = 0, gap_y = 0;  // the controller's RAM is wider than the glass
   int qspi_mhz = 40;
   bool round = false;
-  int corner_radius = 0;  // rounded glass corners (hg::DisplayInfo::corner_radius)
+  uint8_t corner_radius = 0;  // rounded glass corners (hg::DisplayInfo::corner_radius)
   // While the screen is dark the panel sleeps, and main.cpp rests the touch
   // controller and the processor's full speed with it.
   bool sleep_when_dark = false;

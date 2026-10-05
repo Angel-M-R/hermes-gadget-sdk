@@ -154,7 +154,7 @@ hg::DisplayInfo AmoledDisplay::info() const {
   di.swap_bytes = true;  // big-endian RGB565 on the wire
   di.has_backlight = true;  // brightness command 0x51
   di.round = cfg_.round;
-  di.corner_radius = static_cast<uint8_t>(cfg_.corner_radius);
+  di.corner_radius = cfg_.corner_radius;
   di.emissive = true;  // AMOLED: black pixels are off
   return di;
 }
