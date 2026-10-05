@@ -106,6 +106,9 @@ between images:
 | `--mouth-w`, `--mouth-h` | Mouth size | 0.10, 0.045 |
 | `--ear-cup` | Where the listening waves start | 0.62 0.30 |
 | `--think-dot` | Where the thinking dots go | 0.82 0.11 |
+| `--listen-waves` | Which way the listening waves face, `left` or `right` | right |
+| `--talk-waves` | Which way the speaking waves face | left |
+| `--sizes` | Pixel sizes to build; the screen draws the largest that fits | 64 96 144 192 |
 
 A centred portrait needs nothing but the picture. These four cases need more:
 
@@ -132,6 +135,15 @@ A centred portrait needs nothing but the picture. These four cases need more:
 A logo or an object, with nothing to blink, can be generated as a still picture with
 `--plain`.
 
+- **A face looking right**, where the space for the waves is in front of it: `--talk-waves
+  right`, with `--mouth-*` and `--ear-cup` near the front edge of the drawing.
+- **A large screen**: the UI draws the largest size that fits, so a 368x448 panel has room
+  for more than 192 px. `--sizes 64 96 144 192 288` adds one; each 288 px frame costs about
+  10 KB of flash.
+- **No eyes at all**, like a closed helmet: anything that reads as an eye can blink. A visor
+  slit given as `--eye-left` and `--eye-right`, one box per half, closes to a thin line with
+  the default `--blink light`.
+
 Crop before you measure, not after: `--crop X0 Y0 X1 Y1` trims the source first, which moves
 the outline and therefore every fraction above.
 
@@ -156,8 +168,8 @@ hermes-gadget face my-face.png --mask bright --eye-left 0.2197 0.4602 0.0482 0.0
 R starts over, Q closes the window. `--pick` writes nothing, so a mis-click cannot touch the
 artwork. It needs Tk, the same dependency the simulator window has.
 
-The copied command uses the full image path and keeps the crop, threshold, blink mode, and
-anchor positions shown in the picker. Enlarged eye and mouth sizes are already included in
+The copied command uses the full image path and keeps the crop, threshold, blink mode,
+wave directions, output sizes, and anchor positions shown in the picker. Enlarged eye and mouth sizes are already included in
 the coordinates; do not add the growth flags again. On Windows, paste the command into
 PowerShell. On macOS and Linux, use a POSIX shell such as Bash or Zsh. Add `--out`, `--preview`,
 or `--check` to choose output files before running it.
@@ -176,6 +188,16 @@ decides it is the 192 px one, because that is the largest the face is drawn on a
 screen. The shipped mascot changes **226 bits at 192 px** on a blink and 16 on talk, and the
 test suite asserts those two numbers. Anything in that range reads on the screen; much less
 and the blink is a flicker nobody notices.
+
+## Keeping a face next to the mascot
+
+Generate into `firmware/core/faces/<name>.cpp` instead of over the mascot, and choose it at
+build time: `CONFIG_HG_FACE="<name>"` in a board's `sdkconfig.defaults` (or `idf.py
+menuconfig` → **Hermes Gadget** → **Face**), and `cmake -DHG_FACE=<name>` for the simulator's
+library. Every other build keeps the shipped mascot, and `mascot_data.cpp` stays as it ships,
+so updates to the project merge cleanly. PlatformIO keeps `firmware/esp32/sdkconfig.<env>`
+between builds: delete it after changing the face in `sdkconfig.defaults`, or the old face is
+built again.
 
 ## Putting the mascot back
 

@@ -39,6 +39,12 @@ class Board:
     scroll_buttons: bool = True
     round: bool = False  # circular panel: pixels outside the circle are not shown
     touch: bool = False  # touchscreen: hold to talk, tap to answer yes, swipe down to cancel
+    # Physical keys beside the screen, marked by icons: (edge 'l' or 'r', offset from the centre).
+    talk_key: tuple[str, int] | None = None
+    power_key: tuple[str, int] | None = None  # also turns the screen off and on (Simulator.power_key)
+    battery: bool = False  # a power chip reports the battery, shown in the top bar
+    corner_radius: int = 0  # rounded glass corners: the screen loses them, the bars keep clear
+    emissive: bool = False  # OLED / AMOLED: the background is pure black
 
 
 BOARDS = {
@@ -49,7 +55,12 @@ BOARDS = {
     # A 1.54" 240x240 SPI LCD with codecs (e.g. Waveshare ESP32-S3-LCD-1.54): no scroll buttons.
     "sim-240x240": Board("sim-240x240", 240, 240, scroll_buttons=False),
     # A 1.75" round 466x466 AMOLED touch board (e.g. ESP32-S3-Touch-AMOLED-1.75): no scroll buttons.
-    "sim-466x466-round": Board("sim-466x466-round", 466, 466, scroll_buttons=False, round=True, touch=True),
+    "sim-466x466-round": Board("sim-466x466-round", 466, 466, scroll_buttons=False, round=True, touch=True,
+                               emissive=True),
+    # A 1.8" 368x448 AMOLED touch board (e.g. ESP32-S3-Touch-AMOLED-1.8): no scroll buttons.
+    "sim-368x448": Board("sim-368x448", 368, 448, scroll_buttons=False, touch=True,
+                         talk_key=("r", -100), power_key=("r", 100), battery=True, corner_radius=40,
+                         emissive=True),
     # A 1.9" 320x170 board with no audio hardware (e.g. LilyGO T-Display-S3).
     "sim-320x170-nospeaker": Board("sim-320x170-nospeaker", 320, 170, mic=False, speaker=False,
                                    scroll_buttons=False),
@@ -63,6 +74,15 @@ def _circle_spans(width: int, height: int) -> list[tuple[int, int]]:
         dy = y + 0.5 - height / 2
         half = (r * r - dy * dy) ** 0.5 if abs(dy) < r else 0.0
         spans.append((max(0, round(width / 2 - half)), min(width, round(width / 2 + half))))
+    return spans
+
+
+def _rounded_spans(width: int, height: int, radius: int) -> list[tuple[int, int]]:
+    spans = []
+    for y in range(height):
+        d = min(y + 0.5, height - y - 0.5)  # distance from the nearer edge
+        cut = radius - (radius * radius - (radius - d) ** 2) ** 0.5 if d < radius else 0.0
+        spans.append((round(cut), width - round(cut)))
     return spans
 
 
@@ -162,8 +182,11 @@ class Simulator:
             server_url=url, access_token=token, mic=b.mic, speaker=b.speaker, backlight=b.backlight,
             scroll_buttons=b.scroll_buttons, library=library, button_labels=button_labels,
             round_panel=b.round, touch_screen=b.touch, update_capacity=UPDATE_SLOT_BYTES,
-            update_pending=update_pending)
-        self._round_spans = _circle_spans(b.width, b.height) if b.round else None
+            update_pending=update_pending, talk_key=b.talk_key, power_key=b.power_key,
+            corner_radius=b.corner_radius, emissive=b.emissive)
+        # The lit part of each row on glass that isn't rectangular; None when all of it is.
+        self.glass_spans = (_circle_spans(b.width, b.height) if b.round else
+                            _rounded_spans(b.width, b.height, b.corner_radius) if b.corner_radius else None)
         self._register_actions()
 
     # -- Host implementation (called by the core) ---------------------------------------
@@ -313,6 +336,8 @@ class Simulator:
         self.device.begin()
         self.device.set_sensor("battery_pct", round(self.peripherals.battery))
         self.device.set_sensor("temperature_c", self.peripherals.temperature_c)
+        if self.board.battery:
+            self.device.set_power(round(self.peripherals.battery))
         self.set_network(network)
 
     def set_network(self, up: bool) -> None:
@@ -416,6 +441,14 @@ class Simulator:
 
     def set_sensor(self, name: str, value: float) -> None:
         self.device.set_sensor(name, value)
+        if name == "battery_pct":
+            self.peripherals.battery = value
+            if self.board.battery:
+                self.device.set_power(round(value))
+
+    def power_key(self) -> None:
+        """A short press of the power key (boards with one): the screen goes off, or back on."""
+        self.device.power_key()
 
     def console(self, line: str) -> str:
         return self.device.console(line)
@@ -437,12 +470,12 @@ class Simulator:
 
     def rgb888(self, y0: int = 0, y1: int | None = None) -> bytes:
         rgb = png.rgb565_to_rgb888(self.device.framebuffer_rows(y0, y1))
-        if self._round_spans is None:
+        if self.glass_spans is None:
             return rgb
-        # A round panel has no corners: show them black, as the glass would.
+        # Round or rounded glass has no corners: show them black, as the glass would.
         out, w = bytearray(rgb), self.board.width
         for i, y in enumerate(range(y0, y0 + len(rgb) // (3 * w))):
-            x0, x1 = self._round_spans[y]
+            x0, x1 = self.glass_spans[y]
             row = i * w * 3
             out[row: row + x0 * 3] = bytes(x0 * 3)
             out[row + x1 * 3: row + w * 3] = bytes((w - x1) * 3)

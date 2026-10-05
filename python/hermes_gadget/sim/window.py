@@ -91,12 +91,7 @@ class SimulatorWindow:
         self._shrink = 2 if b.height + 360 > self.root.winfo_screenheight() - 90 else 1
         w, h = b.width * self.zoom // self._shrink, b.height * self.zoom // self._shrink
         self._rgb = bytearray(self.sim.rgb888())
-        self._round_spans = []
-        if b.round:
-            radius = min(b.width, b.height) / 2
-            for y in range(b.height):
-                half = math.sqrt(max(0, radius ** 2 - (y + 0.5 - b.height / 2) ** 2))
-                self._round_spans.append((max(0, round(b.width / 2 - half)), min(b.width, round(b.width / 2 + half))))
+        self._glass_spans = self.sim.glass_spans or []
         self.root.title(f"{self.sim.status().get('name', 'Hermes Gadget')} · Simulator")
         self._base_height = min(self.root.winfo_screenheight() - 90, max(720, h + 360))
         self.root.geometry(f"{width}x{self._base_height}")
@@ -199,6 +194,8 @@ class SimulatorWindow:
         self.root.bind("<Up>", lambda e: self._scroll("up"))
         self.root.bind("<Down>", lambda e: self._scroll("down"))
         self.root.bind("<Control-s>", lambda e: self._screenshot())
+        if self.sim.board.power_key:
+            self.root.bind("<Control-p>", lambda e: self.sim.power_key())
         self.root.bind("<FocusOut>", lambda e: self.root.after_idle(self._release_if_unfocused))
         self.root.protocol("WM_DELETE_WINDOW", self._quit)
 
@@ -476,10 +473,10 @@ class SimulatorWindow:
         b = self.sim.board
         stride = b.width * 3
         self._rgb[y0 * stride:y1 * stride] = self.sim.rgb888(y0, y1)
-        if b.round:
+        if self._glass_spans:
             background = bytes.fromhex(BG[1:])
             for y in range(y0, y1):
-                x0, x1 = self._round_spans[y]
+                x0, x1 = self._glass_spans[y]
                 self._rgb[y * stride:y * stride + x0 * 3] = background * x0
                 self._rgb[y * stride + x1 * 3:(y + 1) * stride] = background * (b.width - x1)
         ppm = png.encode_ppm(bytes(self._rgb), b.width, b.height)

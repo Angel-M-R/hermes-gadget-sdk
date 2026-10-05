@@ -61,10 +61,15 @@ Implement `hg::Display` (`firmware/core/include/hg/hal.hpp`):
 | `framebuffer()` | A width × height RGB565 buffer you own (PSRAM on ESP32) |
 | `flush(y0, y1)` | Push full-width rows `[y0, y1)` to the panel |
 | `set_backlight(percent)` | Optional |
+| `set_sleep(asleep)` | Optional. Called after `set_backlight(0)` when the screen goes dark, and before the backlight returns. Nothing is drawn meanwhile and the whole screen is redrawn after waking, so the port may stop the panel and parts that only serve the screen. `AmoledDisplay` sends the CO5300's sleep in and sleep out when `AmoledConfig::sleep_when_dark` is set, and runs its `board_sleep` hook for the touch controller and processor clock |
 
 `SpiDisplay` in `port_display.cpp` is the reference. To add ILI9341, GC9A01 or another panel, swap `esp_lcd_new_panel_st7789` for the matching `esp_lcd` driver (most are managed components). For RGB/parallel or QSPI AMOLED panels, the same interface applies with that panel's `esp_lcd` IO.
 
 **Round panels** (for example a 1.75" 466×466 AMOLED): set `round = true`. The UI then draws inside the square inscribed in the circle, keeps everything else dark, centres the status row, and tells the host `"shape": "round"`. Try it with the `sim-466x466-round` simulator board.
+
+**Rounded corners** (for example the 1.8" 368×448 AMOLED, radius about 40 px): set `corner_radius`. The top and bottom bars grow slightly and keep their text clear of the curve.
+
+**OLED and AMOLED panels**: set `emissive = true`. An unlit pixel draws no power there, so the UI paints its background and bars pure black instead of a dark tint; the face, text and controls are the only pixels lit.
 
 - **Monochrome or e-paper:** convert RGB565 to your format in `flush()`. The UI uses dark backgrounds with light text and accents, so thresholding the luminance works.
 - **Very small screens** (128×64): the layout scales text to 1×. You may want a slimmer layout; `Ui` reads only `DisplayInfo`.
@@ -77,7 +82,7 @@ The AXP2101 implementation is in `firmware/drivers/axp2101.cpp`, with the ESP32 
 
 CoreS3 has a separate `CoreS3Control` in `firmware/drivers/cores3.cpp`. It enables the required audio supplies, boost and AW9523 reset outputs before display, touch and audio initialization. Its masked writes preserve unrelated settings. `SpiDisplay::board_backlight` routes brightness through DLDO1 on this board. Native tests cover supply values, reset timing, preservation of other registers, brightness and failed I2C access. `CodecAudioConfig::speaker` selects the AW88298 driver for CoreS3; other profiles keep ES8311.
 
-A display that advertises `has_backlight` must accept zero percent to turn dark. `screen_timeout` dims and then darkens an idle display while keeping the device connected. Raw touch drivers should use `TouchGestures`, which consumes the first touch when waking. Button input through `App::on_button` does the same.
+A display that advertises `has_backlight` must accept zero percent to turn dark. `screen_timeout` dims and then darkens an idle display while keeping the device connected. Raw touch drivers should use `TouchGestures`, which consumes the first touch when waking. Button input through `App::on_button` does the same. A touch controller that sleeps with the screen must report a lifted finger before it stops reading, so a hold does not stay pressed.
 
 ## Audio through a codec chip
 
@@ -105,6 +110,8 @@ Boards like the ESP32-S3-BOX family and the ESP32-S3-Touch-AMOLED-1.75 route aud
 - **A single button:** `Talk` only. Long-press handling for `Cancel` belongs in the port.
 
 Set `DeviceProfile::has_cancel_button`, `has_scroll_buttons` and the labels so the hint bar and the `hello` capabilities match the hardware.
+
+Keys that sit beside the screen can be marked with icons: set `DeviceProfile::talk_key` and `power_key` to the edge (`'l'` or `'r'`) and the key's offset from the screen's vertical centre. A key that should turn the screen off and on calls `App::on_power_key()` on each short press; the AMOLED-1.8 reads its PWR key's short-press interrupt from the AXP2101 (`Axp2101::take_short_press`). Touch screens with a speaker get the speaker button for mute automatically.
 
 ## Sensors
 

@@ -26,6 +26,12 @@ struct DisplayInfo {
   // A circular panel (width == height). The UI keeps to the square inscribed
   // in the circle and leaves the rest dark.
   bool round = false;
+  // Rounded glass corners, radius in pixels: the top and bottom bars grow a
+  // little and keep their text clear of the curve.
+  uint8_t corner_radius = 0;
+  // OLED / AMOLED: an unlit pixel draws no power, so the UI paints its
+  // background and bars pure black instead of a dark tint.
+  bool emissive = false;
 };
 
 // A full-frame RGB565 framebuffer owned by the port (PSRAM on hardware).
@@ -37,6 +43,11 @@ class Display {
   // Push rows [y0, y1) to the panel. Rows are contiguous in the framebuffer.
   virtual void flush(uint16_t y0, uint16_t y1) = 0;
   virtual void set_backlight(uint8_t percent) { (void)percent; }
+  // The screen went dark (the idle timer or the power key), or is lighting
+  // again: called after set_backlight(0), and before the backlight returns.
+  // Nothing is drawn while it is dark and the whole screen is redrawn after
+  // waking, so a port may stop the panel and what only serves the screen.
+  virtual void set_sleep(bool asleep) { (void)asleep; }
 };
 
 // Microphone: after start() succeeds, the port delivers mono PCM16 samples at

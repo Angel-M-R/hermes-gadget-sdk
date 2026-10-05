@@ -80,4 +80,19 @@ bool parse_wifi_setup(std::string_view body, std::string_view nonce, WifiCredent
   return true;
 }
 
+std::string wifi_join_code(std::string_view ssid, std::string_view password) {
+  auto escaped = [](std::string_view s) {
+    std::string out;
+    for (char c : s) {
+      if (c == '\\' || c == ';' || c == ',' || c == ':' || c == '"') out += '\\';
+      out += c;
+    }
+    return out;
+  };
+  std::string code = password.empty() ? "WIFI:T:nopass;S:" : "WIFI:T:WPA;S:";
+  code += escaped(ssid);
+  if (!password.empty()) code += ";P:" + escaped(password);
+  return code + ";;";
+}
+
 }  // namespace hg

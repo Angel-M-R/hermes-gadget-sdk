@@ -158,6 +158,45 @@ def test_the_command_takes_a_picture_and_writes_a_face(tmp_path):
     assert (tmp_path / "c.png").exists(), "the geometry check is how features get placed"
 
 
+def test_wave_directions_are_written_only_when_they_differ_from_the_mascots(tmp_path):
+    Image = pytest.importorskip("PIL.Image")
+    src = tmp_path / "face.png"
+    img = Image.new("RGB", (128, 128), (0, 0, 0))
+    for x in range(30, 100):
+        for y in range(20, 110):
+            img.putpixel((x, y), (255, 255, 255))
+    img.save(src)
+
+    def anchors(*flags):
+        out = tmp_path / "face.cpp"
+        assert cli.main(["face", str(src), "--mask", "bright", *flags, "--out", str(out),
+                         "--preview", str(tmp_path / "p.png"), "--check", str(tmp_path / "c.png")]) == 0
+        return re.search(r"const Anchors kAnchors = \{(.*)\};", out.read_text()).group(1)
+
+    default = anchors()
+    assert default.count(",") == 9, "the mascot's directions leave the initialiser as it was"
+    assert anchors("--talk-waves", "right").endswith(", 1, 1")
+    assert anchors("--listen-waves", "left").endswith(", -1, -1")
+
+
+def test_a_face_can_add_a_size_for_a_larger_screen(tmp_path):
+    Image = pytest.importorskip("PIL.Image")
+    src = tmp_path / "face.png"
+    img = Image.new("RGB", (128, 128), (0, 0, 0))
+    for x in range(30, 100):
+        for y in range(20, 110):
+            img.putpixel((x, y), (255, 255, 255))
+    img.save(src)
+    out = tmp_path / "face.cpp"
+    assert cli.main(["face", str(src), "--mask", "bright", "--sizes", "288", "64", "--out", str(out),
+                     "--preview", str(tmp_path / "p.png"), "--check", str(tmp_path / "c.png")]) == 0
+    found = arrays(out.read_text())
+    assert sorted(found) == sorted(f"k{f}{s}" for f in ("Idle", "Blink", "Talk") for s in (64, 288))
+    assert len(found["kIdle288"]) == 288 * 288 // 8
+    with pytest.raises(SystemExit):
+        cli.main(["face", str(src), "--sizes", "600", "--out", str(out)])
+
+
 def test_the_command_wants_both_eyes_or_neither(tmp_path):
     Image = pytest.importorskip("PIL.Image")
     src = tmp_path / "face.png"
@@ -282,7 +321,8 @@ def test_a_picked_anchor_overrides_the_default():
 
 
 @pytest.mark.parametrize("plain", [False, True])
-def test_picker_command_runs_in_the_shell_and_preserves_the_picture(tmp_path, plain):
+@pytest.mark.parametrize("sizes", [face.SIZES, (64, 288)])
+def test_picker_command_runs_in_the_shell_and_preserves_the_picture(tmp_path, plain, sizes):
     from PIL import Image, ImageDraw
 
     src = tmp_path / "artist's $face.png"
@@ -292,7 +332,8 @@ def test_picker_command_runs_in_the_shell_and_preserves_the_picture(tmp_path, pl
     opts = face.Options(mask="bright", threshold=200, crop=(64, 64, 1088, 1088),
                         blink="dark", plain=plain, eye_left=(.25, .3, .125, .1),
                         eye_right=(.75, .3, .125, .1), eye_grow=2, mouth_grow=2,
-                        mouth_w=.125, mouth_h=.1, ear_cup=(.25, .25), think_dot=(.75, .125))
+                        mouth_w=.125, mouth_h=.1, ear_cup=(.25, .25), think_dot=(.75, .125),
+                        sizes=sizes, listen_waves="left", talk_waves="right")
     master = face.load_master(src, mask=opts.mask, threshold=opts.threshold, crop=opts.crop)
     alpha = master.getchannel("A")
     picker = face.Picker(face.ink_box(alpha, opts.threshold), face.measure(alpha, opts), opts)
@@ -314,9 +355,12 @@ def test_picker_command_runs_in_the_shell_and_preserves_the_picture(tmp_path, pl
     assert "mouth:     (320, 512, 448, 640)" in result.stdout
     assert "ear cup:   (256, 288)   think dot: (512, 208)" in result.stdout
     data = arrays((tmp_path / "face.cpp").read_text())
-    assert len(data) == 12
-    assert (data["kIdle192"] == data["kBlink192"]) is plain
-    assert (data["kIdle192"] == data["kTalk192"]) is plain
+    assert len(data) == 3 * len(sizes)
+    generated = (tmp_path / "face.cpp").read_text()
+    assert ", -1, 1" in generated
+    size = sizes[-1]
+    assert (data[f"kIdle{size}"] == data[f"kBlink{size}"]) is plain
+    assert (data[f"kIdle{size}"] == data[f"kTalk{size}"]) is plain
     assert Image.open(tmp_path / "check.png").size == (512, 704)
 
 

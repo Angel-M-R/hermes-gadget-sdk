@@ -1,7 +1,9 @@
 #include "hg/ui.hpp"
 
 #include <algorithm>
+#include <cstdlib>
 #include <cstring>
+#include <iterator>
 #include <vector>
 
 #include "hg/font.hpp"
@@ -9,8 +11,10 @@
 namespace hg {
 namespace {
 
-constexpr uint16_t kBg = rgb565(10, 14, 20);
-constexpr uint16_t kBar = rgb565(24, 31, 42);
+// A backlit LCD shows a dark tint; an emissive panel keeps those pixels off (Ui::bg_, Ui::bar_).
+constexpr uint16_t kTintBg = rgb565(10, 14, 20);
+constexpr uint16_t kTintBar = rgb565(24, 31, 42);
+constexpr uint16_t kButton = rgb565(24, 31, 42);  // the speaker button stays visible on black
 constexpr uint16_t kText = rgb565(232, 238, 242);
 constexpr uint16_t kDim = rgb565(132, 146, 160);
 constexpr uint16_t kFaint = rgb565(52, 62, 76);
@@ -102,6 +106,82 @@ uint32_t hero_anim_key(const UiModel& m) {
   return h.get();
 }
 
+// Small icons as pixel rows ('#' = set), drawn at an integer scale.
+constexpr const char* kSpeakerOn[] = {
+    "....#...#..",
+    "...##....#.",
+    "..###.#...#",
+    "#####..#..#",
+    "#####..#..#",
+    "#####..#..#",
+    "..###.#...#",
+    "...##....#.",
+    "....#...#..",
+};
+constexpr const char* kSpeakerMuted[] = {
+    "....#......",
+    "...##......",
+    "..###.#...#",
+    "#####..#.#.",
+    "#####...#..",
+    "#####..#.#.",
+    "..###.#...#",
+    "...##......",
+    "....#......",
+};
+constexpr const char* kMic[] = {
+    "..###..",
+    ".#####.",
+    ".#####.",
+    ".#####.",
+    ".#####.",
+    "#.###.#",
+    "#.....#",
+    ".#...#.",
+    "..###..",
+    "...#...",
+    ".#####.",
+};
+constexpr const char* kPower[] = {
+    "....#....",
+    "..#.#.#..",
+    ".#..#..#.",
+    "#...#...#",
+    "#.......#",
+    "#.......#",
+    ".#.....#.",
+    "..#####..",
+};
+
+template <size_t N>
+constexpr int glyph_w(const char* const (&rows)[N]) {
+  return static_cast<int>(std::char_traits<char>::length(rows[0]));
+}
+
+template <size_t N>
+void glyph(Canvas& c, int x, int y, const char* const (&rows)[N], int scale, uint16_t color) {
+  for (size_t r = 0; r < N; ++r) {
+    for (int col = 0; rows[r][col]; ++col) {
+      if (rows[r][col] == '#') c.fill_rect(x + col * scale, y + static_cast<int>(r) * scale, scale, scale, color);
+    }
+  }
+}
+
+// How far a rounded corner of radius r eats into a pixel row d pixels from the
+// top or bottom edge.
+int corner_cut(int r, int d) {
+  if (r <= 0 || d >= r) return 0;
+  const int k = r - d, target = r * r - k * k;
+  int x = 0;
+  while ((x + 1) * (x + 1) <= target) ++x;  // integer square root: no floats in the renderer
+  return r - x;
+}
+
+// Screens with the speaker button and the key icons: the conversation itself.
+bool conversation(Screen s) {
+  return s == Screen::Ready || s == Screen::Listening || s == Screen::Thinking || s == Screen::Responding;
+}
+
 uint16_t caption_color(Screen s) {
   switch (s) {
     case Screen::Listening: return kGreen;
@@ -141,6 +221,8 @@ const char* screen_name(Screen s) {
 }
 
 Ui::Ui(Display& display) : display_(display), panel_(display.info()), info_(panel_) {
+  bg_ = panel_.emissive ? rgb565(0, 0, 0) : kTintBg;
+  bar_ = panel_.emissive ? rgb565(0, 0, 0) : kTintBar;
   if (panel_.round) {
     // The largest square inside the circle; the corners of the panel do not exist.
     const int side = std::min(panel_.width, panel_.height) * 707 / 1000;
@@ -151,8 +233,15 @@ Ui::Ui(Display& display) : display_(display), panel_(display.info()), info_(pane
   int w = info_.width, h = info_.height;
   int s = std::max(1, std::min(4, std::min(w / 160, h / 120)));
   layout_.scale = s;
-  layout_.top_h = Canvas::line_height(s) + 2 * s;
+  // Rounded glass corners: the bars grow and their text moves towards the middle, clear of the curve.
+  const int corner = panel_.round ? 0 : panel_.corner_radius;
+  bar_pad_ = corner ? 3 * s : 0;
+  layout_.top_h = Canvas::line_height(s) + 2 * s + bar_pad_;
   layout_.bottom_h = layout_.top_h;
+  if (corner) {
+    top_inset_ = corner_cut(corner, s + bar_pad_) + s;
+    bottom_inset_ = corner_cut(corner, layout_.bottom_h - s - font::kGlyphHeight * s) + s;
+  }
   layout_.header_h = Canvas::line_height(s + 1) + 4 * s;
   layout_.main_y = layout_.top_h;
   layout_.main_h = h - layout_.top_h - layout_.bottom_h;
@@ -181,7 +270,7 @@ void Ui::render(const UiModel& m) {
   if (!valid_ && (ox_ || oy_)) {
     // Round panel: everything outside the UI area stays the background colour.
     Canvas panel(display_.framebuffer(), panel_.width, panel_.height, panel_.swap_bytes);
-    panel.fill_rect(0, 0, panel_.width, panel_.height, kBg);
+    panel.fill_rect(0, 0, panel_.width, panel_.height, bg_);
     display_.flush(0, panel_.height);
   }
   Canvas c = canvas();
@@ -189,16 +278,24 @@ void Ui::render(const UiModel& m) {
   const int y_content = y_header + layout_.header_h;
   const int y_bottom = h - layout_.bottom_h;
 
+  // A round panel's corners and header ends are too close to the glass edge for the button.
+  const bool speaker = m.speaker_button && !panel_.round && conversation(m.screen);
+  speaker_ = speaker ? (m.hero ? hero_speaker(m) : header_speaker(m)) : Circle{};
+
   uint32_t hashes[4];
-  hashes[0] = Hash().add(m.title).val(m.link).get();
+  hashes[0] = Hash().add(m.title).val(m.link).val(m.battery).val(m.charging).val(m.usb_power).get();
   hashes[1] = Hash()
                   .val(m.screen)
                   .add(m.headline)
                   .val(animated(m.screen) ? m.frame : 0u)
                   .val(m.screen == Screen::Listening ? m.level : uint8_t(0))
                   .val(m.speaking)
+                  .val(speaker)
+                  .val(m.muted)
+                  .val(m.speaker_pressed)
                   .get();
-  hashes[2] = Hash().val(m.screen).add(m.detail).add(m.body).add(m.code).val(m.scroll).val(m.color_test).get();
+  hashes[2] =
+      Hash().val(m.screen).add(m.detail).add(m.body).add(m.qr).add(m.code).val(m.scroll).val(m.color_test).get();
   hashes[3] = Hash().add(m.hint).get();
 
   if (m.hero) {
@@ -212,7 +309,21 @@ void Ui::render(const UiModel& m) {
       flush(y0, y1);
       hash_[i] = hashes[i];
     }
-    uint32_t stat = Hash().val(m.screen).add(m.headline).add(m.detail).add(m.yes).add(m.no).val(m.caption_lines).get();
+    uint32_t stat = Hash()
+                        .val(m.screen)
+                        .add(m.headline)
+                        .add(m.detail)
+                        .add(m.yes)
+                        .add(m.no)
+                        .val(m.caption_lines)
+                        .val(speaker)
+                        .val(m.muted)
+                        .val(m.speaker_pressed)
+                        .val(m.talk_edge)
+                        .val(m.talk_dy)
+                        .val(m.power_edge)
+                        .val(m.power_dy)
+                        .get();
     uint32_t anim = hero_anim_key(m);
     int y0 = y_header, y1 = y_bottom;
     bool redraw = !valid_ || !hero_valid_ || stat != hero_static_;
@@ -262,7 +373,7 @@ void Ui::render(const UiModel& m) {
 void Ui::draw_top(Canvas& c, const UiModel& m) {
   const int s = layout_.scale;
   const int w = info_.width;
-  c.fill_rect(0, 0, w, layout_.top_h, panel_.round ? kBg : kBar);
+  c.fill_rect(0, 0, w, layout_.top_h, panel_.round ? bg_ : bar_);
   uint16_t dot = kRed;
   const char* label = "OFFLINE";
   switch (m.link) {
@@ -271,7 +382,7 @@ void Ui::draw_top(Canvas& c, const UiModel& m) {
     case Link::Connecting: dot = kYellow; label = "LINK"; break;
     case Link::Online: dot = kGreen; label = "ONLINE"; break;
   }
-  int ty = s;
+  int ty = s + bar_pad_;
   if (panel_.round) {
     // A round face stays quiet: just the link dot, centred, like a watch's status mark.
     int r = std::max(2, 3 * s / 2 + 1);
@@ -279,12 +390,36 @@ void Ui::draw_top(Canvas& c, const UiModel& m) {
     return;
   }
   int label_w = Canvas::text_width(label, s);
-  int label_x = w - 3 * s - label_w;
+  int label_x = w - 3 * s - top_inset_ - label_w;
   c.text(label_x, ty, label, s, kDim);
   int r = std::max(2, 3 * s / 2 + 1);
-  c.fill_circle(label_x - 3 * s - r, layout_.top_h / 2, r, dot);
-  int title_cols = cols_for(label_x - 6 * s - 2 * r - 3 * s, s);
-  c.text(3 * s, ty, fit(m.title, title_cols), s, kText);
+  const int text_mid = ty + font::kGlyphHeight * s / 2;
+  c.fill_circle(label_x - 3 * s - r, text_mid, r, dot);
+  int left_of = label_x - 6 * s - 2 * r;  // where the next item must end
+
+  // Battery: an outline filled to the charge, then the percentage; "USB" on mains with no battery.
+  if (m.battery >= 0 || m.usb_power) {
+    const bool low = m.battery >= 0 && m.battery <= 15 && !m.charging;
+    const uint16_t tone = m.charging ? kGreen : low ? kRed : kDim;
+    std::string pct = m.battery >= 0 ? std::to_string(m.battery) + "%" : "USB";
+    int tx = left_of - Canvas::text_width(pct, s);
+    c.text(tx, ty, pct, s, tone);
+    left_of = tx - 2 * s;
+    if (m.battery >= 0) {
+      const int bh = 7 * s, bw = 11 * s, nub = std::max(1, s);
+      const int bx = left_of - nub - bw, by = text_mid - bh / 2;
+      c.rect(bx, by, bw, bh, kDim);
+      c.fill_rect(bx + bw, by + bh / 3, nub, bh - 2 * (bh / 3), kDim);
+      const int inner = bw - 2 * s - (s > 1 ? 1 : 0);
+      const int fill = std::max(m.battery > 0 ? 1 : 0, inner * m.battery / 100);
+      c.fill_rect(bx + s, by + s, fill, bh - 2 * s, tone == kDim ? kText : tone);
+      left_of = bx - 3 * s;
+    } else {
+      left_of -= s;
+    }
+  }
+  int title_cols = cols_for(left_of - 3 * s - top_inset_, s);
+  c.text(3 * s + top_inset_, ty, fit(m.title, title_cols), s, kText);
 }
 
 void Ui::draw_indicator(Canvas& c, const UiModel& m, int cx, int cy, int r) {
@@ -327,7 +462,7 @@ void Ui::draw_indicator(Canvas& c, const UiModel& m, int cx, int cy, int r) {
     case Screen::Error: {
       c.fill_circle(cx, cy, r, kRed);
       int tw = Canvas::text_width("!", s);
-      c.text(cx - tw / 2, cy - (7 * s) / 2, "!", s, kBg);
+      c.text(cx - tw / 2, cy - (7 * s) / 2, "!", s, bg_);
       break;
     }
     case Screen::Pairing:
@@ -355,7 +490,7 @@ void Ui::draw_indicator(Canvas& c, const UiModel& m, int cx, int cy, int r) {
     case Screen::Prompt: {
       c.fill_circle(cx, cy, r, kAccent);
       int tw = Canvas::text_width("?", s);
-      c.text(cx - tw / 2, cy - (7 * s) / 2, "?", s, kBg);
+      c.text(cx - tw / 2, cy - (7 * s) / 2, "?", s, bg_);
       break;
     }
     case Screen::Image:
@@ -369,14 +504,19 @@ void Ui::draw_header(Canvas& c, const UiModel& m) {
   const int s = layout_.scale;
   const int y0 = layout_.top_h;
   const int hh = layout_.header_h;
-  c.fill_rect(0, y0, info_.width, hh, kBg);
+  c.fill_rect(0, y0, info_.width, hh, bg_);
   int r = hh / 2 - 2 * s;
   int cx = 4 * s + r;
   int cy = y0 + hh / 2;
   draw_indicator(c, m, cx, cy, r);
   int tx = cx + r + 4 * s;
   int hs = s + 1;
-  int cols = cols_for(info_.width - tx - 2 * s, hs);
+  int right = info_.width - 2 * s;
+  if (speaker_.r) {
+    draw_speaker(c, m, speaker_);
+    right = speaker_.cx - speaker_.r - 2 * s;
+  }
+  int cols = cols_for(right - tx, hs);
   c.text(tx, cy - (font::kGlyphHeight * hs) / 2, fit(m.headline, cols), hs, kText);
   c.fill_rect(4 * s, y0 + hh - 1, info_.width - 8 * s, 1, kFaint);
 }
@@ -396,7 +536,7 @@ void Ui::draw_content(Canvas& c, const UiModel& m) {
   const int y1 = info_.height - layout_.bottom_h;
   const int margin = 4 * s;
   const int lh = Canvas::line_height(s);
-  c.fill_rect(0, y0, w, y1 - y0, kBg);
+  c.fill_rect(0, y0, w, y1 - y0, bg_);
   int y = y0 + margin;
 
   if (m.color_test) {
@@ -435,6 +575,7 @@ void Ui::draw_content(Canvas& c, const UiModel& m) {
     }
   }
   if (m.body.empty() || rows <= 0) return;
+  if (!m.qr.empty() && draw_qr_body(c, m, y, y1)) return;
 
   auto lines = wrap_text(m.body, layout_.body_cols);
   int total = static_cast<int>(lines.size());
@@ -452,6 +593,73 @@ void Ui::draw_content(Canvas& c, const UiModel& m) {
     c.fill_rect(w - 2 * s, track_y, s, track_h, kFaint);
     c.fill_rect(w - 2 * s, thumb_y, s, thumb_h, kDim);
   }
+}
+
+bool Ui::draw_qr_body(Canvas& c, const UiModel& m, int top, int bottom) {
+  if (m.qr != qr_text_) {
+    qr_text_ = m.qr;
+    qr_ = QrCode::encode(m.qr);
+  }
+  if (!qr_.size()) return false;
+  const int s = layout_.scale, margin = 4 * s;
+  const int quiet = 2;  // light modules around the code; the screen beyond is dark
+  const int n = qr_.size() + 2 * quiet;
+  const int avail_w = info_.width - 2 * margin, avail_h = bottom - margin - top;
+  // A word must not break across lines: the setup address is one long word.
+  int longest = 0, word = 0;
+  for (char ch : m.body + " ") {
+    if (ch == ' ' || ch == '\n') word = 0;
+    else longest = std::max(longest, ++word);
+  }
+  struct Fit {
+    int module = 0, scale = 1;
+    bool beside = false;
+    std::vector<std::string> lines;
+  } fit;
+  // Under: the code above the text, which keeps the body's size.
+  if (longest <= layout_.body_cols) {
+    fit.lines = wrap_text(m.body, layout_.body_cols);
+    const int text_h = static_cast<int>(fit.lines.size()) * Canvas::line_height(s);
+    fit.module = std::max(0, std::min(avail_w, avail_h - text_h - margin)) / n;
+    fit.scale = s;
+  }
+  // Beside: the code at the left, the text at its right, smaller if it must be.
+  const int beside = std::min(avail_h, avail_w / 2) / n;
+  for (int ts = s; ts >= 1 && beside > fit.module; --ts) {
+    const int cols = cols_for(avail_w - beside * n - margin, ts);
+    if (cols < longest) continue;
+    auto lines = wrap_text(m.body, cols);
+    if (static_cast<int>(lines.size()) * Canvas::line_height(ts) > avail_h) continue;
+    fit = {beside, ts, true, std::move(lines)};
+  }
+  if (fit.module < 2) return false;
+
+  const int side = fit.module * n, lh = Canvas::line_height(fit.scale);
+  const int text_h = static_cast<int>(fit.lines.size()) * lh;
+  int qx, qy, tx, ty;
+  if (fit.beside) {
+    qx = margin;
+    qy = top + (avail_h - side) / 2;
+    tx = qx + side + margin;
+    ty = top + (avail_h - text_h) / 2;
+  } else {
+    qx = (info_.width - side) / 2;
+    qy = top + (avail_h - side - margin - text_h) / 2;
+    tx = margin;
+    ty = qy + side + margin;
+  }
+  c.fill_rect(qx, qy, side, side, rgb565(255, 255, 255));
+  for (int y = 0; y < qr_.size(); ++y) {
+    for (int x = 0; x < qr_.size(); ++x) {
+      if (qr_.dark(x, y))
+        c.fill_rect(qx + (x + quiet) * fit.module, qy + (y + quiet) * fit.module, fit.module, fit.module, 0);
+    }
+  }
+  for (const auto& line : fit.lines) {
+    c.text(tx, ty, line, fit.scale, kText);
+    ty += lh;
+  }
+  return true;
 }
 
 Ui::HeroGeom Ui::hero_geom(const UiModel& m) const {
@@ -524,7 +732,7 @@ void Ui::draw_hero(Canvas& c, const UiModel& m) {
   const int y0 = layout_.top_h;
   const int y1 = info_.height - layout_.bottom_h;
   const int lh = Canvas::line_height(s);
-  c.fill_rect(0, y0, w, y1 - y0, kBg);
+  c.fill_rect(0, y0, w, y1 - y0, bg_);
 
   const HeroGeom g = hero_geom(m);
   const int size = g.size, mx = g.x, my = g.y;
@@ -553,14 +761,14 @@ void Ui::draw_hero(Canvas& c, const UiModel& m) {
   switch (m.screen) {
     case Screen::Listening: {
       int lit = 1 + std::min(2, m.level / 34);
-      waves(mx + size * a.ear_cup.x / 1000, my + size * a.ear_cup.y / 1000, +1, lit,
+      waves(mx + size * a.ear_cup.x / 1000, my + size * a.ear_cup.y / 1000, a.listen_dir, lit,
             static_cast<int>(m.frame % 3), kGreen, kGreenDim, 90);
       break;
     }
     case Screen::Responding:
       if (m.speaking) {
         // Start outside the face outline so the waves read as sound, not as lines on her cheek.
-        waves(mx + size * a.mouth.x / 1000, my + size * a.mouth.y / 1000, -1, 3,
+        waves(mx + size * a.mouth.x / 1000, my + size * a.mouth.y / 1000, a.talk_dir, 3,
               static_cast<int>((m.frame / 2) % 3), kAccent, kAccentDim, 130);
       }
       break;
@@ -569,6 +777,8 @@ void Ui::draw_hero(Canvas& c, const UiModel& m) {
     case Screen::Updating: dots(kAccent, kAccentDim); break;
     default: break;
   }
+  if (speaker_.r) draw_speaker(c, m, speaker_);
+  if (conversation(m.screen)) draw_key_marks(c, m, g);
 
   // Caption: headline, then the detail lines, centred.
   const int cols = layout_.hero_cols;
@@ -594,11 +804,67 @@ void Ui::draw_hero(Canvas& c, const UiModel& m) {
   }
 }
 
+Ui::Circle Ui::hero_speaker(const UiModel&) const {
+  const int s = layout_.scale;
+  const int r = 18 * s;  // a thumb-sized target: 72 px across at scale 2
+  return {4 * s + r, layout_.top_h + 4 * s + r, r};
+}
+
+Ui::Circle Ui::header_speaker(const UiModel&) const {
+  const int s = layout_.scale;
+  const int r = layout_.header_h / 2 - 2 * s;  // the same size as the indicator on the left
+  return {info_.width - 4 * s - r, layout_.top_h + layout_.header_h / 2, r};
+}
+
+bool Ui::speaker_hit(int x, int y) const {
+  if (!speaker_.r) return false;
+  const int lx = x - ox_, ly = y - oy_;
+  const int reach = speaker_.r + 6 * layout_.scale;  // fingers are wider than the icon
+  // Never steal the title bar: holding it opens the settings.
+  return ly >= layout_.top_h && std::abs(lx - speaker_.cx) <= reach && std::abs(ly - speaker_.cy) <= reach;
+}
+
+void Ui::draw_speaker(Canvas& c, const UiModel& m, Circle at) {
+  // Muted stands out, like a lit button; on is quiet.
+  c.fill_circle(at.cx, at.cy, at.r, m.muted ? kText : kButton);
+  if (m.speaker_pressed) c.ring(at.cx, at.cy, at.r, std::max(2, layout_.scale), kAccent);
+  const int gw = glyph_w(kSpeakerOn), gh = static_cast<int>(std::size(kSpeakerOn));
+  const int gs = std::max(1, at.r * 6 / 5 / gw);
+  const int gx = at.cx - gw * gs / 2, gy = at.cy - gh * gs / 2;
+  if (m.muted) glyph(c, gx, gy, kSpeakerMuted, gs, bg_);
+  else glyph(c, gx, gy, kSpeakerOn, gs, kDim);
+}
+
+void Ui::draw_key_marks(Canvas& c, const UiModel& m, const HeroGeom& g) {
+  const int s = layout_.scale, w = info_.width, lh = Canvas::line_height(s);
+  // The caption lines under the mascot, centred: an icon never sits on one.
+  const std::string head = fit(m.headline, layout_.hero_cols);
+  auto crosses_caption = [&](int x0, int y0, int x1, int y1) {
+    for (size_t i = 0; i <= g.detail.size(); ++i) {
+      const int tw = Canvas::text_width(i == 0 ? head : g.detail[i - 1], s);
+      const int ly = g.caption_y + static_cast<int>(i) * lh;
+      if (y0 < ly + lh && y1 > ly && x0 < (w + tw) / 2 + s && x1 > (w - tw) / 2 - s) return true;
+    }
+    return false;
+  };
+  auto place = [&](char edge, int dy, int gw, int gh, int& x, int& y) {
+    if (edge != 'l' && edge != 'r') return false;
+    x = edge == 'r' ? w - 3 * s - gw * s : 3 * s;
+    y = info_.height / 2 + dy - gh * s / 2;
+    return !crosses_caption(x, y, x + gw * s, y + gh * s);
+  };
+  int x = 0, y = 0;
+  if (place(m.talk_edge, m.talk_dy, glyph_w(kMic), static_cast<int>(std::size(kMic)), x, y))
+    glyph(c, x, y, kMic, s, m.screen == Screen::Listening ? kGreen : kDim);
+  if (place(m.power_edge, m.power_dy, glyph_w(kPower), static_cast<int>(std::size(kPower)), x, y))
+    glyph(c, x, y, kPower, s, kDim);
+}
+
 void Ui::draw_bottom(Canvas& c, const UiModel& m) {
   const int s = layout_.scale;
   const int y0 = info_.height - layout_.bottom_h;
-  c.fill_rect(0, y0, info_.width, layout_.bottom_h, panel_.round ? kBg : kBar);
-  std::string hint = fit(m.hint, cols_for(info_.width - 4 * s, s));
+  c.fill_rect(0, y0, info_.width, layout_.bottom_h, panel_.round ? bg_ : bar_);
+  std::string hint = fit(m.hint, cols_for(info_.width - 4 * s - 2 * bottom_inset_, s));
   c.text((info_.width - Canvas::text_width(hint, s)) / 2, y0 + s, hint, s, kDim);
 }
 

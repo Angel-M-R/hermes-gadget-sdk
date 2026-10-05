@@ -6,14 +6,39 @@ namespace hg {
 
 bool App::wake_display() {
   activity_at_ = now();
+  display_off_by_user_ = false;
   const bool sleeping = display_sleeping_;
   if (display_dimmed_ || sleeping) {
     display_dimmed_ = display_sleeping_ = false;
+    if (sleeping) hal_.display->set_sleep(false);
     hal_.display->set_backlight(brightness_);
     if (ui_) ui_->invalidate();
     update_model();
   }
   return sleeping;
+}
+
+void App::wake_for_activity() {
+  if (!display_off_by_user_) wake_display();
+}
+
+void App::darken_display() {
+  display_sleeping_ = true;
+  display_dimmed_ = false;
+  hal_.display->set_backlight(0);
+  hal_.display->set_sleep(true);
+}
+
+void App::on_power_key() {
+  if (!hal_.display || !hal_.display->info().has_backlight) return;
+  if (display_sleeping_) {
+    wake_display();
+    return;
+  }
+  // Phone setup's password and an update's progress stay on screen.
+  if (!wifi_setup_text_.empty() || ota_busy() || ota_ == Ota::Restarting) return;
+  display_off_by_user_ = true;
+  darken_display();
 }
 
 void App::power_tick() {
@@ -23,15 +48,20 @@ void App::power_tick() {
     sensors_dirty_ = true;
     if (settings_open()) update_model();
   }
-  if (!hal_.display || !hal_.display->info().has_backlight || !screen_timeout_ms_) return;
+  if (!hal_.display || !hal_.display->info().has_backlight) return;
+  if (display_off_by_user_) {
+    // Off stays off through replies; a question or an update still shows.
+    if (prompt_showing() || ota_busy()) wake_display();
+    return;
+  }
+  if (!screen_timeout_ms_) return;
   const bool idle = mode_ == Mode::Idle && !speaking() && !settings_open() && !talk_held_ && !cancel_held_ &&
                     !prompt_showing() && wifi_setup_text_.empty() && !ota_busy() && ota_ != Ota::Restarting && overlay_ == Overlay::None &&
                     (phase_ == Phase::NoNetwork || (phase_ == Phase::Online && paired_));
   if (!idle) { wake_display(); return; }
   const uint32_t elapsed = now() - activity_at_;
   if (elapsed >= screen_timeout_ms_ && !display_sleeping_) {
-    display_sleeping_ = true;
-    hal_.display->set_backlight(0);
+    darken_display();
   } else if (elapsed >= screen_timeout_ms_ / 2 && !display_dimmed_ && !display_sleeping_) {
     display_dimmed_ = true;
     hal_.display->set_backlight(std::min<uint8_t>(brightness_, 10));

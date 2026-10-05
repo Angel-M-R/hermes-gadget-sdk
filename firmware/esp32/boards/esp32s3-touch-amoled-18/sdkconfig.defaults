@@ -1,0 +1,23 @@
+# Waveshare ESP32-S3-Touch-AMOLED-1.8 V2: ESP32-S3R8 (8 MB octal PSRAM), 16 MB flash,
+# 368x448 CO5300 AMOLED, CST820 touch, ES8311 (speaker and microphone), AXP2101, TCA9554.
+# Pins: docs/hardware.md#esp32-s3-touch-amoled-18
+CONFIG_IDF_TARGET="esp32s3"
+# CONFIG_ESPTOOLPY_FLASHSIZE_4MB is not set
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_OCT=y
+CONFIG_SPIRAM_SPEED_80M=y
+# The 330 KB framebuffer and audio buffers go to PSRAM.
+CONFIG_SPIRAM_USE_MALLOC=y
+# If PSRAM ever fails to start, boot anyway so the log and `diag` can say so.
+CONFIG_SPIRAM_IGNORE_NOTFOUND=y
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
+# Power management for the processor's clock: full speed while the screen is lit,
+# down to 80 MHz while it is dark (hgp::cpu in port_system.cpp). No light sleep.
+CONFIG_PM_ENABLE=y
+# The USB-C port is the S3's own USB Serial/JTAG, and UART0 only reaches the header.
+# The console must live on USB: a secondary console is output-only, so commands
+# typed over USB would never arrive.
+# CONFIG_ESP_CONSOLE_UART_DEFAULT is not set
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+CONFIG_HG_BOARD_AMOLED_18=y

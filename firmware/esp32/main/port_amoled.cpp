@@ -1,5 +1,6 @@
-// QSPI AMOLED panel with a CO5300 controller (e.g. the round 466x466 1.75"
-// modules), driven directly through esp_lcd panel IO in quad mode.
+// QSPI AMOLED panel with a CO5300 controller (the round 466x466 1.75" and the
+// rectangular 368x448 1.8" modules), driven directly through esp_lcd panel IO
+// in quad mode.
 //
 // Framing on the QSPI link: commands go out as (0x02 << 24) | (cmd << 8) with
 // their parameters; pixels as (0x32 << 24) | (RAMWR << 8). The controller only
@@ -8,6 +9,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <iterator>
 
 #include "driver/gpio.h"
 #include "driver/spi_master.h"
@@ -36,7 +38,7 @@ struct InitCommand {
 // Panel bring-up for CO5300 1.75" modules: vendor page settings, RGB565,
 // tearing line on, full brightness, the 466x466 window (column offset 6),
 // then sleep out and display on.
-constexpr InitCommand kInit[] = {
+constexpr InitCommand kInit175[] = {
     {0x36, {0x00}, 1, 0},  // memory access control: no rotation
     {0x3A, {0x55}, 1, 0},  // 16 bits per pixel
     {0xFE, {0x20}, 1, 0},
@@ -52,6 +54,24 @@ constexpr InitCommand kInit[] = {
     {0x2A, {0x00, 0x06, 0x01, 0xD7}, 4, 0},
     {0x2B, {0x00, 0x00, 0x01, 0xD1}, 4, 600},
     {0x11, {}, 0, 600},  // sleep out
+    {0x29, {}, 0, 0},    // display on
+};
+
+// The 1.8" panel, from Waveshare's board support package for the
+// ESP32-S3-Touch-AMOLED-1.8: no vendor page settings, the 368x448 window
+// (column offset 16), then sleep out and display on.
+constexpr InitCommand kInit18[] = {
+    {0x36, {0x00}, 1, 0},  // memory access control: no rotation
+    {0x3A, {0x55}, 1, 0},  // 16 bits per pixel
+    {0xFE, {0x00}, 1, 0},
+    {0xC4, {0x80}, 1, 0},
+    {0x35, {0x00}, 1, 0},  // tearing effect line on
+    {0x53, {0x20}, 1, 0},  // brightness control on
+    {0x51, {0xFF}, 1, 0},  // brightness
+    {0x63, {0xFF}, 1, 0},
+    {0x2A, {0x00, 0x10, 0x01, 0x7F}, 4, 0},
+    {0x2B, {0x00, 0x00, 0x01, 0xBF}, 4, 0},
+    {0x11, {}, 0, 120},  // sleep out
     {0x29, {}, 0, 0},    // display on
 };
 
@@ -116,9 +136,12 @@ bool AmoledDisplay::begin(const AmoledConfig& cfg) {
     gpio_set_level(static_cast<gpio_num_t>(cfg.rst), 1);
     vTaskDelay(pdMS_TO_TICKS(150));
   }
-  for (const auto& c : kInit) {
-    command(c.cmd, c.data, c.len);
-    if (c.delay_ms) vTaskDelay(pdMS_TO_TICKS(c.delay_ms));
+  const bool rect18 = cfg.panel == AmoledPanel::Rect18;
+  const InitCommand* init = rect18 ? kInit18 : kInit175;
+  const size_t count = rect18 ? std::size(kInit18) : std::size(kInit175);
+  for (size_t i = 0; i < count; ++i) {
+    command(init[i].cmd, init[i].data, init[i].len);
+    if (init[i].delay_ms) vTaskDelay(pdMS_TO_TICKS(init[i].delay_ms));
   }
   ESP_LOGI(TAG, "CO5300 %ux%u ready", cfg.width, cfg.height);
   return true;
@@ -131,6 +154,8 @@ hg::DisplayInfo AmoledDisplay::info() const {
   di.swap_bytes = true;  // big-endian RGB565 on the wire
   di.has_backlight = true;  // brightness command 0x51
   di.round = cfg_.round;
+  di.corner_radius = static_cast<uint8_t>(cfg_.corner_radius);
+  di.emissive = true;  // AMOLED: black pixels are off
   return di;
 }
 
@@ -159,6 +184,15 @@ void AmoledDisplay::flush(uint16_t y0, uint16_t y1) {
 void AmoledDisplay::set_backlight(uint8_t percent) {
   const uint8_t level = static_cast<uint8_t>(255u * std::min<uint8_t>(percent, 100) / 100u);
   command(0x51, &level, 1);
+}
+
+void AmoledDisplay::set_sleep(bool asleep) {
+  if (!cfg_.sleep_when_dark) return;
+  if (!asleep && board_sleep) board_sleep(false);  // the processor at full speed for the redraw
+  command(asleep ? 0x10 : 0x11, nullptr, 0);       // sleep in / sleep out
+  // The controller needs this long before its next sleep command or pixels.
+  vTaskDelay(pdMS_TO_TICKS(120));
+  if (asleep && board_sleep) board_sleep(true);
 }
 
 }  // namespace hgp

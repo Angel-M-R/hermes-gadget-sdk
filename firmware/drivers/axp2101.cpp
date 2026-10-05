@@ -30,6 +30,26 @@ bool Axp2101::power_off() {
   return read_(0x10, &config, 1) && write_(0x10, static_cast<uint8_t>((config & ~0x02) | 0x01));
 }
 
+namespace {
+constexpr uint8_t kIrqEnable2 = 0x41;  // IRQ enable 2: power key bits
+constexpr uint8_t kIrqStatus2 = 0x49;  // IRQ status 2, write 1 to clear
+constexpr uint8_t kPowerKeyShort = 0x08;
+}  // namespace
+
+bool Axp2101::enable_power_key() {
+  uint8_t enabled = 0;
+  if (!read_(kIrqEnable2, &enabled, 1) || !write_(kIrqEnable2, static_cast<uint8_t>(enabled | kPowerKeyShort)))
+    return false;
+  return write_(kIrqStatus2, kPowerKeyShort);  // forget a press from before boot
+}
+
+bool Axp2101::take_short_press() {
+  uint8_t status = 0;
+  if (!read_(kIrqStatus2, &status, 1) || !(status & kPowerKeyShort)) return false;
+  write_(kIrqStatus2, kPowerKeyShort);
+  return true;
+}
+
 bool Axp2101::enable_aldo1_3v3() {
   uint8_t voltage, enabled;
   if (!read_(0x92, &voltage, 1) || !read_(0x90, &enabled, 1)) return false;

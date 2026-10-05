@@ -20,7 +20,7 @@ from .. import paths
 
 log = logging.getLogger("hermes_gadget.sim")
 
-ABI_VERSION = 5
+ABI_VERSION = 6
 
 BUTTON_TALK, BUTTON_CANCEL, BUTTON_UP, BUTTON_DOWN = 0, 1, 2, 3
 BUTTONS = {"talk": BUTTON_TALK, "cancel": BUTTON_CANCEL, "up": BUTTON_UP, "down": BUTTON_DOWN}
@@ -98,7 +98,23 @@ class _Config(Structure):
         ("touch", c_int),
         ("update_capacity", c_size_t),
         ("update_pending", c_int),
+        ("talk_key_edge", c_int),
+        ("talk_key_dy", c_int),
+        ("power_key_edge", c_int),
+        ("power_key_dy", c_int),
+        ("corner_radius", c_int),
+        ("emissive", c_int),
     ]
+
+
+def _key_mark(mark: tuple[str, int] | None) -> tuple[int, int]:
+    """An icon beside a physical key: (edge 'l' or 'r', offset from the vertical centre)."""
+    if not mark:
+        return 0, 0
+    edge, dy = mark
+    if edge not in ("l", "r"):
+        raise ValueError(f"key edge must be 'l' or 'r', not {edge!r}")
+    return ord(edge), int(dy)
 
 
 class AudioHost(Protocol):
@@ -179,6 +195,8 @@ def load_library(path: Path | None = None) -> ctypes.CDLL:
     lib.hgsim_submit_text.argtypes = [c_void_p, c_char_p]
     lib.hgsim_set_sensor.argtypes = [c_void_p, c_char_p, c_double]
     lib.hgsim_emit_event.argtypes = [c_void_p, c_char_p, c_char_p, c_int]
+    lib.hgsim_set_power.argtypes = [c_void_p, c_int, c_int, c_int]
+    lib.hgsim_power_key.argtypes = [c_void_p]
     lib.hgsim_console.argtypes = [c_void_p, c_char_p, c_char_p, c_size_t]
     lib.hgsim_console.restype = c_int
     lib.hgsim_status.argtypes = [c_void_p, c_char_p, c_size_t]
@@ -206,7 +224,8 @@ class NativeDevice:
                  speaker_rate: int = 16000, library: Path | None = None,
                  button_labels: tuple[str, str] | None = None, round_panel: bool = False,
                  touch_screen: bool = False, update_capacity: int = 0, update_pending: bool = False,
-                 audio_host: AudioHost | None = None):
+                 audio_host: AudioHost | None = None, talk_key: tuple[str, int] | None = None,
+                 power_key: tuple[str, int] | None = None, corner_radius: int = 0, emissive: bool = False):
         self._lib = load_library(library)
         self._host_obj = host
         self.width, self.height = width, height
@@ -214,7 +233,8 @@ class NativeDevice:
         self._strings += [s.encode() for s in button_labels] if button_labels else [None, None]
         self._config = _Config(width, height, int(mic), int(speaker), int(backlight), int(scroll_buttons),
                                mic_rate, speaker_rate, *self._strings, int(round_panel), int(touch_screen),
-                               update_capacity, int(update_pending))
+                               update_capacity, int(update_pending), *_key_mark(talk_key), *_key_mark(power_key),
+                               int(corner_radius), int(emissive))
         self._callbacks = self._make_callbacks(host, audio_host or host)
         self._handle = self._lib.hgsim_create(ctypes.byref(self._config), ctypes.byref(self._callbacks))
         if not self._handle:
@@ -388,6 +408,15 @@ class NativeDevice:
 
     def set_sensor(self, name: str, value: float) -> None:
         self._lib.hgsim_set_sensor(self._handle, name.encode(), float(value))
+
+    def set_power(self, battery_percent: int | None, charging: bool = False, external_power: bool = False) -> None:
+        """What the board's power chip reports; None means no battery is fitted."""
+        pct = -1 if battery_percent is None else max(0, min(100, int(battery_percent)))
+        self._lib.hgsim_set_power(self._handle, pct, int(charging), int(external_power))
+
+    def power_key(self) -> None:
+        """A short press of the board's power key: screen off, or back on."""
+        self._lib.hgsim_power_key(self._handle)
 
     def emit_event(self, name: str, data: Any = None, notify: bool = False) -> None:
         self._lib.hgsim_emit_event(self._handle, name.encode(), json.dumps(data or {}).encode(), int(notify))

@@ -16,6 +16,7 @@ Have these ready:
 | [Waveshare ESP32-S3-LCD-1.54](hardware.md#waveshare-esp32-s3-lcd-154) | BOOT to talk, PLUS to cancel; onboard microphones and speaker |
 | [Waveshare ESP32-S3-Touch-AMOLED-1.75](hardware.md#esp32-s3-touch-amoled-175) | Hold the screen to talk, swipe down to cancel; microphones and a speaker output |
 | [Waveshare ESP32-S3-Touch-AMOLED-1.75C](hardware.md#esp32-s3-touch-amoled-175c) | Hold the screen to talk, swipe down to cancel; onboard microphones and speaker; experimental |
+| [Waveshare ESP32-S3-Touch-AMOLED-1.8 (V2)](hardware.md#esp32-s3-touch-amoled-18) | Hold the screen or BOOT to talk, swipe down to cancel; onboard microphone and speaker; experimental |
 | [Espressif ESP32-S3-BOX-3](hardware.md#esp32-s3-box-3) | Hold the screen or BOOT to talk, swipe down to cancel; onboard microphones and speaker; experimental |
 | [M5Stack CoreS3](hardware.md#m5stack-cores3) | Hold the screen to talk, swipe down to cancel; onboard audio and battery management; experimental |
 | [ESP32-S3 breadboard build](hardware.md) | Wire the display, microphone, buttons, and optional speaker first |
@@ -56,7 +57,7 @@ For a custom build, follow [Build and flash](hardware.md#build-and-flash). For U
 
 Phone setup configures a board that already runs the firmware. A board without a saved Wi-Fi network opens setup automatically at startup. To change an existing connection, open [device settings](using-gadget.md#device-settings-and-hardware-checks) and select **Wi-Fi setup**.
 
-1. Join the `Hermes-XXXX` network shown on the gadget. Enter its temporary password, also shown on the screen. Each setup session gets a new password.
+1. Join the `Hermes-XXXX` network shown on the gadget: scan the QR code on its screen with your phone's camera, or enter the temporary password shown below it. Each setup session gets a new password. A screen too small for a readable code shows only the text.
 2. Keep this network selected if your phone warns that it has no internet. Open `http://192.168.4.1` in the phone's browser.
 3. Enter your 2.4 GHz network name, its password, and the device URL from `hermes gadget info`. Leave the password empty only for an open network.
 4. Choose **Check connection and save**. The board allows up to 30 seconds to connect. If your phone disconnects during the check, rejoin the gadget's network and reload the page.

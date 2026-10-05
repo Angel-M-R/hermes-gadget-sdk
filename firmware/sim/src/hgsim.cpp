@@ -25,6 +25,8 @@ class SimHal final : public hg::Display,
     info_.swap_bytes = false;
     info_.has_backlight = cfg.has_backlight != 0;
     info_.round = cfg.round != 0;
+    info_.emissive = cfg.emissive != 0;
+    info_.corner_radius = static_cast<uint8_t>(cfg.corner_radius < 0 ? 0 : cfg.corner_radius > 255 ? 255 : cfg.corner_radius);
   }
 
   // Display
@@ -146,6 +148,14 @@ class SimUpdater final : public hg::Updater {
   bool pending_;
 };
 
+// What the host last reported through hgsim_set_power.
+class SimPower final : public hg::Power {
+ public:
+  std::optional<hg::PowerStatus> read() override { return status; }
+  bool power_off() override { return false; }
+  hg::PowerStatus status;
+};
+
 int copy_out(const std::string& s, char* out, size_t cap) {
   if (!out || cap == 0) return static_cast<int>(s.size());
   size_t n = s.size() < cap - 1 ? s.size() : cap - 1;
@@ -159,6 +169,7 @@ int copy_out(const std::string& s, char* out, size_t cap) {
 struct hgsim {
   std::unique_ptr<SimHal> hal_impl;
   std::unique_ptr<SimUpdater> updater;
+  std::unique_ptr<SimPower> power;
   hg::Hal hal;
   std::unique_ptr<hg::App> app;
   std::unique_ptr<hg::TouchGestures> touch;
@@ -208,6 +219,14 @@ hgsim* hgsim_create(const hgsim_config* cfg, const hgsim_host* host) {
     if (!cfg->cancel_label) profile.cancel_label = "Swipe down";
     profile.extra_settings = {"touch_cancel"};
   }
+  auto key_mark = [](int edge, int dy) {
+    hg::DeviceProfile::KeyMark k;
+    if (edge == 'l' || edge == 'r') k.edge = static_cast<char>(edge);
+    k.dy = static_cast<int16_t>(dy < -2048 ? -2048 : dy > 2048 ? 2048 : dy);
+    return k;
+  };
+  profile.talk_key = key_mark(cfg->talk_key_edge, cfg->talk_key_dy);
+  profile.power_key = key_mark(cfg->power_key_edge, cfg->power_key_dy);
   sim->app = std::make_unique<hg::App>(sim->hal, profile);
   if (cfg->touch) {
     sim->touch = std::make_unique<hg::TouchGestures>(*sim->app);
@@ -277,6 +296,19 @@ void hgsim_submit_text(hgsim* sim, const char* text) { sim->app->submit_text(tex
 void hgsim_set_sensor(hgsim* sim, const char* name, double value) {
   if (name) sim->app->set_sensor(name, value);
 }
+void hgsim_set_power(hgsim* sim, int battery_percent, int charging, int external_power) {
+  if (!sim->power) {
+    sim->power = std::make_unique<SimPower>();
+    sim->hal.power = sim->power.get();
+  }
+  hg::PowerStatus& p = sim->power->status;
+  p.battery_present = battery_percent >= 0;
+  p.battery_percent.reset();
+  if (battery_percent >= 0) p.battery_percent = static_cast<uint8_t>(battery_percent > 100 ? 100 : battery_percent);
+  p.charging = battery_percent >= 0 && charging != 0;
+  p.external_power = external_power != 0;
+}
+void hgsim_power_key(hgsim* sim) { sim->app->on_power_key(); }
 void hgsim_emit_event(hgsim* sim, const char* name, const char* data_json, int notify_agent) {
   if (!name) return;
   hg::json::Value data = hg::json::Value::object();

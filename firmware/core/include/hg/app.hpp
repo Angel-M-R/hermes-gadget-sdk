@@ -43,12 +43,27 @@ struct DeviceProfile {
   bool has_scroll_buttons = false;
   std::string talk_label = "TALK";
   std::string cancel_label = "CANCEL";
+  // A TALK key that lifts for a moment under the thumb holding it (the
+  // AMOLED-1.8's small BOOT key). While a held recording runs, a release
+  // counts only once TALK has stayed up this long; a press before then
+  // continues the same recording. Applies to every TALK release, holding the
+  // screen included. 0 ends the recording at the release.
+  uint16_t talk_release_grace_ms = 0;
   // The screen stands in for the buttons (hold to talk, tap to answer yes,
   // swipe to cancel); on-screen hints are worded for touch.
   bool touch_screen = false;
   // Board-specific settings the console accepts besides the core ones. Changes
   // reach the port through App::on_setting_changed.
   std::vector<std::string> extra_settings;
+  // A physical key beside the screen, marked by an icon next to it: the edge
+  // it sits on ('l' or 'r'; 0 = no icon) and its height as an offset in pixels
+  // from the screen's vertical centre.
+  struct KeyMark {
+    char edge = 0;
+    int16_t dy = 0;
+  };
+  KeyMark talk_key;   // a microphone, lit while recording
+  KeyMark power_key;  // a power symbol: the key that turns the screen off (App::on_power_key)
 };
 
 // A device-side capability the agent may invoke. `params` is a JSON-schema
@@ -94,11 +109,27 @@ class App {
   bool settings_title_hit(int x, int y) const;
   // Returns true when this input only wakes a sleeping display.
   bool wake_display();
+  // A short press of the board's power key: turns the screen off, or back on.
+  // Off stays off through replies until the user touches a control; a question
+  // from Hermes still wakes it.
+  void on_power_key();
+  // The on-screen speaker button (touch screens with a speaker): holding it
+  // mutes or unmutes, a tap only says so. TouchGestures reports the touch.
+  enum class SpeakerTouch : uint8_t { Down, Hold, Tap, Leave };
+  bool speaker_button_hit(int x, int y) const;
+  void on_speaker_button(SpeakerTouch touch);
+  bool muted() const { return muted_; }
   bool start_wifi_setup();
   void close_wifi_setup();
   bool wifi_setup_open() const { return !wifi_setup_text_.empty(); }
-  // These run on the app task. Start returns private, on-screen instructions.
-  std::function<std::string()> on_wifi_setup;
+  // These run on the app task. Start returns private, on-screen instructions
+  // (empty when setup can't start) and, for a QR code beside them, the text
+  // that joins the setup network (wifi_join_code).
+  struct WifiSetup {
+    std::string text;
+    std::string join_code;
+  };
+  std::function<WifiSetup()> on_wifi_setup;
   std::function<void()> on_wifi_setup_close;
 
   // Serial-console command (provisioning, bench automation). Returns the
@@ -172,6 +203,12 @@ class App {
   void settings_tick();
   void settings_model();
   void stop_hardware_check();
+  // The speaker volume as heard: 0 while muted.
+  void apply_volume();
+  // Wakes the screen for something Hermes does, unless the user switched it off.
+  void wake_for_activity();
+  // Turns the screen dark, the panel's sleep included.
+  void darken_display();
   void power_tick();
   json::Value power_value() const;
   json::Value status_value() const;
@@ -184,6 +221,8 @@ class App {
   void send_hello();
   bool can_talk() const;
   void start_listening(bool hands_free);
+  // TALK let go of a held recording at `released_at`: sends it, or discards a tap.
+  void release_talk(uint32_t released_at);
   void finish_listening();
   void cancel_listening(std::string_view why);
   void stop_playback();
@@ -222,6 +261,8 @@ class App {
   std::string access_token_;
   TalkMode talk_mode_ = TalkMode::Hold;
   uint8_t volume_ = 70;
+  bool muted_ = false;
+  bool speaker_pressed_ = false;  // a finger is on the speaker button
   uint8_t brightness_ = 100;
   enum class Menu : uint8_t { Closed, Volume, Brightness, TalkMode, Microphone, Speaker, Display, Inputs, Info,
                               Power, IdleTimer, PowerOff, WifiSetup, Back };
@@ -229,14 +270,17 @@ class App {
   Menu menu_ = Menu::Closed;
   HardwareCheck hardware_check_ = HardwareCheck::None;
   std::string check_result_;
-  std::string wifi_setup_text_;
+  std::string wifi_setup_text_, wifi_setup_code_;
   bool talk_held_ = false;
   bool settings_chord_fired_ = false;
   uint32_t talk_down_at_ = 0;
+  bool talk_release_pending_ = false;  // TALK is up, within talk_release_grace_ms
+  uint32_t talk_up_at_ = 0;
   std::optional<PowerStatus> power_status_;
   uint32_t power_read_at_ = 0, activity_at_ = 0;
   uint32_t screen_timeout_ms_ = 0;
   bool display_dimmed_ = false, display_sleeping_ = false, power_off_armed_ = false;
+  bool display_off_by_user_ = false;  // the power key switched it off
   uint8_t wake_buttons_ = 0;
 
   // connection

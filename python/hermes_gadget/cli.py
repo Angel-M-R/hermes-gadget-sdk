@@ -81,6 +81,8 @@ def _script_step(sim, cmd: str, rest: str) -> None:
         print(f"speaking {rest} ({sim.speak_wav(rest):.1f}s)")
     elif cmd == "sleep":
         sim.run_for(float(rest))
+    elif cmd == "power":
+        sim.power_key()
     elif cmd == "console":
         print(sim.console(rest))
     elif cmd == "status":
@@ -317,6 +319,13 @@ def cmd_console(args) -> int:
 
 # -- face -----------------------------------------------------------------------------------
 
+def _face_size(value: str) -> int:
+    size = int(value)
+    if not 16 <= size <= 512:
+        raise argparse.ArgumentTypeError(f"{size} px: a face size must be 16..512")
+    return size
+
+
 def cmd_face(args) -> int:
     try:
         from . import face
@@ -345,7 +354,9 @@ def cmd_face(args) -> int:
         eye_right=tuple(args.eye_right) if args.eye_right else None,
         eye_grow=args.eye_grow, mouth_grow=args.mouth_grow,
         mouth_x=args.mouth_x, mouth_y=args.mouth_y, mouth_w=args.mouth_w, mouth_h=args.mouth_h,
-        ear_cup=tuple(args.ear_cup), think_dot=tuple(args.think_dot))
+        ear_cup=tuple(args.ear_cup), think_dot=tuple(args.think_dot),
+        listen_waves=args.listen_waves, talk_waves=args.talk_waves,
+        sizes=tuple(sorted(set(args.sizes))) if args.sizes else face.SIZES)
 
     # --pick places the features by hand, and writes nothing: it prints the flags
     # for a real run, so a mis-click cannot touch the shipped artwork.
@@ -484,6 +495,12 @@ def build_parser() -> argparse.ArgumentParser:
                    metavar=("X", "Y"), help="Where the listening waves start")
     f.add_argument("--think-dot", type=float, nargs=2, default=(0.82, 0.11),
                    metavar=("X", "Y"), help="Where the thinking dots go")
+    f.add_argument("--sizes", type=_face_size, nargs="+", metavar="PX", help="Pixel sizes to build (default 64 96 144 192); "
+                   "a larger screen draws the largest that fits")
+    f.add_argument("--listen-waves", choices=("left", "right"), default="right",
+                   help="Which way the listening waves face (the mascot's: right)")
+    f.add_argument("--talk-waves", choices=("left", "right"), default="left",
+                   help="Which way the speaking waves face (the mascot's: left)")
     f.set_defaults(func=cmd_face)
 
     return p

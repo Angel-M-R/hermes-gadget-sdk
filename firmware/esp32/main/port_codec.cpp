@@ -1,6 +1,7 @@
 // The shared I2C bus, and audio through codec chips: an ES8311 DAC or AW88298
 // speaker amplifier and an ES7210 ADC for the microphones, on one duplex I2S
-// bus (esp_codec_dev does the codec register work).
+// bus (esp_codec_dev does the codec register work). A single-microphone board
+// can use the ES8311's own ADC instead of an ES7210.
 #include "port.hpp"  // first: pulls in FreeRTOS.h ahead of task.h/queue.h
 
 #include <cstring>
@@ -80,7 +81,8 @@ bool CodecAudio::begin(const CodecAudioConfig& cfg, i2c_master_bus_handle_t bus)
   es8311_codec_cfg_t dac = {};
   dac.ctrl_if = audio_codec_new_i2c_ctrl(&dac_i2c);
   dac.gpio_if = gpio_if;
-  dac.codec_mode = ESP_CODEC_DEV_WORK_MODE_DAC;
+  const bool es8311_mic = cfg.mic == MicCodec::Es8311;
+  dac.codec_mode = es8311_mic ? ESP_CODEC_DEV_WORK_MODE_BOTH : ESP_CODEC_DEV_WORK_MODE_DAC;
   dac.pa_pin = static_cast<int16_t>(cfg.pa);
   dac.pa_reverted = false;
   dac.master_mode = false;
@@ -101,17 +103,21 @@ bool CodecAudio::begin(const CodecAudioConfig& cfg, i2c_master_bus_handle_t bus)
   out_cfg.data_if = data_if;
   out_ = out_cfg.codec_if ? esp_codec_dev_new(&out_cfg) : nullptr;
 
-  audio_codec_i2c_cfg_t adc_i2c = {};
-  adc_i2c.port = I2C_NUM_0;
-  adc_i2c.addr = ES7210_CODEC_DEFAULT_ADDR;
-  adc_i2c.bus_handle = bus;
-  es7210_codec_cfg_t adc = {};
-  adc.ctrl_if = audio_codec_new_i2c_ctrl(&adc_i2c);
-  adc.mic_selected = kMic1And2;
   esp_codec_dev_cfg_t in_cfg = {};
   in_cfg.dev_type = ESP_CODEC_DEV_TYPE_IN;
-  in_cfg.codec_if = es7210_codec_new(&adc);
   in_cfg.data_if = data_if;
+  if (es8311_mic) {
+    in_cfg.codec_if = out_cfg.codec_if;  // the same ES8311 records too
+  } else {
+    audio_codec_i2c_cfg_t adc_i2c = {};
+    adc_i2c.port = I2C_NUM_0;
+    adc_i2c.addr = ES7210_CODEC_DEFAULT_ADDR;
+    adc_i2c.bus_handle = bus;
+    es7210_codec_cfg_t adc = {};
+    adc.ctrl_if = audio_codec_new_i2c_ctrl(&adc_i2c);
+    adc.mic_selected = kMic1And2;
+    in_cfg.codec_if = es7210_codec_new(&adc);
+  }
   in_ = in_cfg.codec_if ? esp_codec_dev_new(&in_cfg) : nullptr;
 
   // Both stay open at one rate: they share the I2S clocks.

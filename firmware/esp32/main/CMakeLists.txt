@@ -17,6 +17,7 @@ idf_component_register(
         "port_diag.cpp"
         "port_display.cpp"
         "port_events.cpp"
+        "port_expander.cpp"
         "port_ota.cpp"
         "port_parallel.cpp"
         "port_power.cpp"
@@ -45,6 +46,7 @@ idf_component_register(
         esp_lcd
         esp_netif
         esp_http_server
+        esp_pm
         esp_psram
         esp_timer
         esp_wifi

@@ -70,7 +70,7 @@ Every screen that isn't showing reply text uses a **hero layout**: the Hermes Ag
 
 ### Interaction
 
-- **Push-to-talk (default):** hold to speak, release to send. A press under 350 ms is discarded as a tap, and recording stops at 30 s.
+- **Push-to-talk (default):** hold to speak, release to send. A press under 350 ms is discarded as a tap, and recording stops at 60 s, the hub's default `max_utterance_s`. A board whose TALK key can slip under the thumb sets `DeviceProfile::talk_release_grace_ms`: a release then ends the recording only after TALK stays up that long (0.4 s on the AMOLED-1.8), and a press before then continues it.
 - **Tap mode** (`set talk_mode tap`): tap to start; the VAD (or a second tap) ends the utterance.
 - **Barge-in:** pressing talk while a reply plays stops playback immediately. The new message reaches Hermes, whose default "interrupt" busy mode stops the old turn.
 - **Cancel** acts on release: it discards a recording, dismisses an overlay, or stops a turn (Hermes `/stop`).

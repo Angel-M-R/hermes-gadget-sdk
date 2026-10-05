@@ -8,6 +8,10 @@ void TouchGestures::press(Button b) { app_.on_button(b, true); }
 void TouchGestures::release(Button b) { app_.on_button(b, false); }
 
 void TouchGestures::tick(uint32_t now_ms) {
+  if (state_ == State::Speaker && now_ms - t0_ >= cfg_.speaker_hold_ms) {
+    state_ = State::Ignored;
+    app_.on_speaker_button(App::SpeakerTouch::Hold);
+  }
   if (state_ == State::Settings && now_ms - t0_ >= 1000) {
     state_ = State::Ignored;
     app_.open_settings();
@@ -27,6 +31,7 @@ void TouchGestures::update(bool touching, int x, int y, uint32_t now_ms) {
         break;
       case State::Talk: release(Button::Talk); break;
       case State::Swipe: release(Button::Cancel); break;
+      case State::Speaker: app_.on_speaker_button(App::SpeakerTouch::Tap); break;
       default: break;
     }
     state_ = State::Idle;
@@ -35,7 +40,12 @@ void TouchGestures::update(bool touching, int x, int y, uint32_t now_ms) {
 
   if (state_ == State::Idle) {
     if (app_.wake_display()) { state_ = State::Ignored; return; }
-    state_ = app_.settings_title_hit(x, y) ? State::Settings : State::Pending;
+    if (app_.speaker_button_hit(x, y)) {
+      state_ = State::Speaker;
+      app_.on_speaker_button(App::SpeakerTouch::Down);
+    } else {
+      state_ = app_.settings_title_hit(x, y) ? State::Settings : State::Pending;
+    }
     x0_ = x;
     y0_ = y;
     t0_ = now_ms;
@@ -46,6 +56,15 @@ void TouchGestures::update(bool touching, int x, int y, uint32_t now_ms) {
   const bool swiped_down = (cfg_.swipe_cancel || app_.settings_open() || app_.wifi_setup_open()) &&
                           dy >= cfg_.swipe_px && std::abs(dx) < dy;
   switch (state_) {
+    case State::Speaker:
+      if (std::abs(dx) > cfg_.slop_px || std::abs(dy) > cfg_.slop_px) {
+        // Sliding off the button leaves mute alone.
+        app_.on_speaker_button(App::SpeakerTouch::Leave);
+        state_ = State::Ignored;
+      } else {
+        tick(now_ms);
+      }
+      break;
     case State::Settings:
       if (swiped_down) {
         state_ = State::Swipe;

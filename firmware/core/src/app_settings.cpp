@@ -26,7 +26,10 @@ bool App::open_settings() {
 
 void App::stop_hardware_check() {
   if (hardware_check_ == HardwareCheck::Microphone && hal_.mic) hal_.mic->stop();
-  if (hardware_check_ == HardwareCheck::Speaker && hal_.speaker) hal_.speaker->abort();
+  if (hardware_check_ == HardwareCheck::Speaker && hal_.speaker) {
+    hal_.speaker->abort();
+    apply_volume();
+  }
   hardware_check_ = HardwareCheck::None;
   level_ = 0;
 }
@@ -93,6 +96,7 @@ void App::settings_input(Button button, bool pressed) {
       break;
     case Menu::Speaker:
       if (hal_.speaker && hal_.speaker->begin(profile_.speaker_rate)) {
+        hal_.speaker->set_volume(volume_);  // a check is heard even while muted; leaving it restores mute
         // A quiet quarter-second square tone, entirely local to the device.
         std::vector<int16_t> tone(profile_.speaker_rate / 4);
         const uint32_t half_period = std::max<uint32_t>(1, profile_.speaker_rate / 1000);
@@ -160,7 +164,10 @@ void App::settings_model() {
   switch (menu_) {
     case Menu::Volume:
       m.detail = "Speaker volume";
-      m.body = hal_.speaker ? std::to_string(volume_) + "%\nChanges are saved." : "No speaker driver is active.";
+      m.body = !hal_.speaker ? "No speaker driver is active."
+               : muted_       ? std::to_string(volume_) + "%, muted\n" +
+                                    (profile_.touch_screen ? "Hold the speaker icon to unmute." : "Console: set mute 0")
+                              : std::to_string(volume_) + "%\nChanges are saved.";
       break;
     case Menu::Brightness:
       m.detail = "Screen brightness";
@@ -241,7 +248,9 @@ bool App::start_wifi_setup() {
   cancel_held_ = false;
   settings_chord_fired_ = false;
   wake_buttons_ = 0;
-  wifi_setup_text_ = on_wifi_setup();
+  WifiSetup setup = on_wifi_setup();
+  wifi_setup_text_ = std::move(setup.text);
+  wifi_setup_code_ = wifi_setup_text_.empty() ? std::string() : std::move(setup.join_code);
   if (wifi_setup_text_.empty()) set_hint_flash("Wi-Fi setup unavailable; use USB");
   update_model();
   return !wifi_setup_text_.empty();
@@ -250,6 +259,7 @@ bool App::start_wifi_setup() {
 void App::close_wifi_setup() {
   if (wifi_setup_text_.empty()) return;
   wifi_setup_text_.clear();
+  wifi_setup_code_.clear();
   if (on_wifi_setup_close) on_wifi_setup_close();
   update_model();
 }
