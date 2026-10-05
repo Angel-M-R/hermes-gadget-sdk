@@ -12,14 +12,14 @@ hermes gateway setup
 
 Choose **Hermes Gadget**. Restart the gateway when setup asks. Setup prints a device address and an installer link with that address filled in.
 
-On this branch, new setups use **Ximena, Spanish from Spain**, through Edge
+Setup on this branch selects **Ximena, Spanish from Spain**, through Edge
 (`es-ES-XimenaNeural`). Enabling the plugin installs its declared `edge-tts`
 dependency through Hermes's package manager. Accept the dependency prompt during
 installation; automated installs can add `--yes-deps`.
 
-Setup replaces Hermes's stock Edge voice only. An already selected voice or a
-different TTS provider is preserved, including when setup is repeated. Voice
-settings belong to the Hermes host and also affect other chats using that host's
+Every setup run overwrites the current TTS provider and voice with this branch's
+values, including existing installations and repeated setup. Voice settings
+belong to the Hermes host and also affect other chats using that host's
 TTS configuration. Install `ffmpeg` on that computer to decode speech for the
 gadget. Ximena needs internet when generating new speech; no API key is needed.
 

@@ -52,7 +52,7 @@ Secrets go in `~/.hermes/.env`, following Hermes's rule that `.env` is only for 
 | Need | Hermes surface | Notes |
 |---|---|---|
 | Register a transport | `ctx.register_platform(...)` → `PlatformEntry` | `allowed_users_env`, `allow_all_env`, `platform_hint`, `max_message_length`, `parse_target_ref_fn` |
-| Setup wizard | `PlatformEntry.setup_fn` | `hermes gateway setup` lists Hermes Gadget and runs its step: enable the platform, pick the port, initialize the branch's voice if Hermes still uses its stock Edge voice, and print the device URL and installer link. Settings use `hermes config set`'s writer. Selected voices are preserved. The wizard then offers the gateway restart |
+| Setup wizard | `PlatformEntry.setup_fn` | `hermes gateway setup` lists Hermes Gadget and runs its step: enable the platform, pick the port, overwrite the current TTS provider and voice with this branch's values, and print the device URL and installer link. This also applies to existing installations and repeated setup. Settings use `hermes config set`'s writer. The wizard then offers the gateway restart |
 | Inbound messages | `BasePlatformAdapter.handle_message(MessageEvent)` | text → `MessageType.TEXT`; voice → `MessageType.VOICE` with a WAV in `media_urls` |
 | Store voice audio | `cache_audio_from_bytes_async` | The gateway's own audio cache |
 | Speech-to-text | Gateway STT for VOICE messages (`stt.*` config) | Hermes transcribes; the device never runs ASR |

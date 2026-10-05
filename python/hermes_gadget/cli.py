@@ -162,7 +162,7 @@ def cmd_plugin_install(args) -> int:
     print(f"installed plugin -> {target}{' (linked)' if args.link else ''}")
     print("\nNext:")
     print("  hermes plugins enable gadget")
-    print("  hermes gateway setup         # choose Hermes Gadget; sets the initial voice")
+    print("  hermes gateway setup         # choose Hermes Gadget; applies the branch voice")
     print("  hermes gateway run            # or restart your gateway service")
     print("  hermes gadget info            # shows the URL to give your device")
     return 0
