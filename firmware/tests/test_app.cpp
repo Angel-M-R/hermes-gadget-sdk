@@ -1,4 +1,5 @@
 // Drives hg::App through a fake HAL the way a Hermes gateway would.
+#include <cmath>
 #include <deque>
 #include <map>
 #include <string>
@@ -57,6 +58,7 @@ struct FakeHal : hg::Display, hg::AudioIn, hg::AudioOut, hg::Transport, hg::Stor
   // Display
   int width = 320, height = 240;
   bool round = false;
+  int corner_radius = 0;
   bool backlight = false;
   int brightness = 0, volume = 0;
   std::vector<uint16_t> fb = std::vector<uint16_t>(320 * 240, 0);
@@ -67,6 +69,7 @@ struct FakeHal : hg::Display, hg::AudioIn, hg::AudioOut, hg::Transport, hg::Stor
     d.width = static_cast<uint16_t>(width);
     d.height = static_cast<uint16_t>(height);
     d.round = round;
+    d.corner_radius = static_cast<uint8_t>(corner_radius);
     d.has_backlight = backlight;
     return d;
   }
@@ -1201,6 +1204,36 @@ TEST("ui: icons mark the keys beside the screen, and the microphone lights while
   r.advance(100);
   CHECK(r.app.screen() == hg::Screen::Listening);
   CHECK_EQ(mic_pixel(), green);
+}
+
+TEST("ui: rounded corners keep the bars' text and status clear of the glass edge") {
+  Rig r(Rig::touch_profile());
+  r.fake.width = 368;
+  r.fake.height = 448;
+  r.fake.corner_radius = 40;
+  r.fake.fb.assign(368 * 448, 0);
+  r.app.console("set name Luis Martos");
+  r.bring_online(true);
+  r.advance(200);
+  const uint16_t bar = hg::rgb565(24, 31, 42);
+  int checked = 0;
+  for (int y = 0; y < 448; ++y) {
+    const double d = std::min(y + 0.5, 448 - y - 0.5), k = 40 - d;
+    if (d >= 28) continue;  // the bars are 28 px tall here (22 plus the corner pad)
+    const int cut = static_cast<int>(40 - std::sqrt(40.0 * 40.0 - k * k) + 0.999);
+    for (int x = 0; x < cut; ++x) {
+      for (int edge : {x, 367 - x}) {
+        const uint16_t px = r.fake.fb[static_cast<size_t>(y * 368 + edge)];
+        CHECK(px == bar);  // nothing but the bar's own colour under the curve
+        ++checked;
+      }
+    }
+  }
+  CHECK(checked > 0);
+  bool name_drawn = false;  // the name still starts near the left, just clear of the curve
+  for (int y = 8; y < 22 && !name_drawn; ++y)
+    for (int x = 20; x < 40; ++x) name_drawn |= r.fake.fb[static_cast<size_t>(y * 368 + x)] != bar;
+  CHECK(name_drawn);
 }
 
 TEST("power: idle screen dims, sleeps and consumes the wake input without recording") {

@@ -26,6 +26,9 @@ struct DisplayInfo {
   // A circular panel (width == height). The UI keeps to the square inscribed
   // in the circle and leaves the rest dark.
   bool round = false;
+  // Rounded glass corners, radius in pixels: the top and bottom bars grow a
+  // little and keep their text clear of the curve.
+  uint8_t corner_radius = 0;
 };
 
 // A full-frame RGB565 framebuffer owned by the port (PSRAM on hardware).

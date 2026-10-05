@@ -55,6 +55,8 @@ Implement `hg::Display` (`firmware/core/include/hg/hal.hpp`):
 
 **Round panels** (for example a 1.75" 466×466 AMOLED): set `round = true`. The UI then draws inside the square inscribed in the circle, keeps everything else dark, centres the status row, and tells the host `"shape": "round"`. Try it with the `sim-466x466-round` simulator board.
 
+**Rounded corners** (for example the 1.8" 368×448 AMOLED, radius about 40 px): set `corner_radius`. The top and bottom bars grow slightly and keep their text clear of the curve.
+
 - **Monochrome or e-paper:** convert RGB565 to your format in `flush()`. The UI uses dark backgrounds with light text and accents, so thresholding the luminance works.
 - **Very small screens** (128×64): the layout scales text to 1×. You may want a slimmer layout; `Ui` reads only `DisplayInfo`.
 

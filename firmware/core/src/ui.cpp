@@ -165,6 +165,16 @@ void glyph(Canvas& c, int x, int y, const char* const (&rows)[N], int scale, uin
   }
 }
 
+// How far a rounded corner of radius r eats into a pixel row d pixels from the
+// top or bottom edge.
+int corner_cut(int r, int d) {
+  if (r <= 0 || d >= r) return 0;
+  const int k = r - d, target = r * r - k * k;
+  int x = 0;
+  while ((x + 1) * (x + 1) <= target) ++x;  // integer square root: no floats in the renderer
+  return r - x;
+}
+
 // Screens with the speaker button and the key icons: the conversation itself.
 bool conversation(Screen s) {
   return s == Screen::Ready || s == Screen::Listening || s == Screen::Thinking || s == Screen::Responding;
@@ -219,8 +229,15 @@ Ui::Ui(Display& display) : display_(display), panel_(display.info()), info_(pane
   int w = info_.width, h = info_.height;
   int s = std::max(1, std::min(4, std::min(w / 160, h / 120)));
   layout_.scale = s;
-  layout_.top_h = Canvas::line_height(s) + 2 * s;
+  // Rounded glass corners: the bars grow and their text moves towards the middle, clear of the curve.
+  const int corner = panel_.round ? 0 : panel_.corner_radius;
+  bar_pad_ = corner ? 3 * s : 0;
+  layout_.top_h = Canvas::line_height(s) + 2 * s + bar_pad_;
   layout_.bottom_h = layout_.top_h;
+  if (corner) {
+    top_inset_ = corner_cut(corner, s + bar_pad_) + s;
+    bottom_inset_ = corner_cut(corner, layout_.bottom_h - s - font::kGlyphHeight * s) + s;
+  }
   layout_.header_h = Canvas::line_height(s + 1) + 4 * s;
   layout_.main_y = layout_.top_h;
   layout_.main_h = h - layout_.top_h - layout_.bottom_h;
@@ -360,7 +377,7 @@ void Ui::draw_top(Canvas& c, const UiModel& m) {
     case Link::Connecting: dot = kYellow; label = "LINK"; break;
     case Link::Online: dot = kGreen; label = "ONLINE"; break;
   }
-  int ty = s;
+  int ty = s + bar_pad_;
   if (panel_.round) {
     // A round face stays quiet: just the link dot, centred, like a watch's status mark.
     int r = std::max(2, 3 * s / 2 + 1);
@@ -368,10 +385,11 @@ void Ui::draw_top(Canvas& c, const UiModel& m) {
     return;
   }
   int label_w = Canvas::text_width(label, s);
-  int label_x = w - 3 * s - label_w;
+  int label_x = w - 3 * s - top_inset_ - label_w;
   c.text(label_x, ty, label, s, kDim);
   int r = std::max(2, 3 * s / 2 + 1);
-  c.fill_circle(label_x - 3 * s - r, layout_.top_h / 2, r, dot);
+  const int text_mid = ty + font::kGlyphHeight * s / 2;
+  c.fill_circle(label_x - 3 * s - r, text_mid, r, dot);
   int left_of = label_x - 6 * s - 2 * r;  // where the next item must end
 
   // Battery: an outline filled to the charge, then the percentage; "USB" on mains with no battery.
@@ -384,7 +402,7 @@ void Ui::draw_top(Canvas& c, const UiModel& m) {
     left_of = tx - 2 * s;
     if (m.battery >= 0) {
       const int bh = 7 * s, bw = 11 * s, nub = std::max(1, s);
-      const int bx = left_of - nub - bw, by = (layout_.top_h - bh) / 2;
+      const int bx = left_of - nub - bw, by = text_mid - bh / 2;
       c.rect(bx, by, bw, bh, kDim);
       c.fill_rect(bx + bw, by + bh / 3, nub, bh - 2 * (bh / 3), kDim);
       const int inner = bw - 2 * s - (s > 1 ? 1 : 0);
@@ -395,8 +413,8 @@ void Ui::draw_top(Canvas& c, const UiModel& m) {
       left_of -= s;
     }
   }
-  int title_cols = cols_for(left_of - 3 * s, s);
-  c.text(3 * s, ty, fit(m.title, title_cols), s, kText);
+  int title_cols = cols_for(left_of - 3 * s - top_inset_, s);
+  c.text(3 * s + top_inset_, ty, fit(m.title, title_cols), s, kText);
 }
 
 void Ui::draw_indicator(Canvas& c, const UiModel& m, int cx, int cy, int r) {
@@ -773,7 +791,7 @@ void Ui::draw_bottom(Canvas& c, const UiModel& m) {
   const int s = layout_.scale;
   const int y0 = info_.height - layout_.bottom_h;
   c.fill_rect(0, y0, info_.width, layout_.bottom_h, panel_.round ? kBg : kBar);
-  std::string hint = fit(m.hint, cols_for(info_.width - 4 * s, s));
+  std::string hint = fit(m.hint, cols_for(info_.width - 4 * s - 2 * bottom_inset_, s));
   c.text((info_.width - Canvas::text_width(hint, s)) / 2, y0 + s, hint, s, kDim);
 }
 

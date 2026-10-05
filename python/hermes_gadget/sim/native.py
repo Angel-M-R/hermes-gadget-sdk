@@ -102,6 +102,7 @@ class _Config(Structure):
         ("talk_key_dy", c_int),
         ("power_key_edge", c_int),
         ("power_key_dy", c_int),
+        ("corner_radius", c_int),
     ]
 
 
@@ -223,7 +224,7 @@ class NativeDevice:
                  button_labels: tuple[str, str] | None = None, round_panel: bool = False,
                  touch_screen: bool = False, update_capacity: int = 0, update_pending: bool = False,
                  audio_host: AudioHost | None = None, talk_key: tuple[str, int] | None = None,
-                 power_key: tuple[str, int] | None = None):
+                 power_key: tuple[str, int] | None = None, corner_radius: int = 0):
         self._lib = load_library(library)
         self._host_obj = host
         self.width, self.height = width, height
@@ -231,7 +232,8 @@ class NativeDevice:
         self._strings += [s.encode() for s in button_labels] if button_labels else [None, None]
         self._config = _Config(width, height, int(mic), int(speaker), int(backlight), int(scroll_buttons),
                                mic_rate, speaker_rate, *self._strings, int(round_panel), int(touch_screen),
-                               update_capacity, int(update_pending), *_key_mark(talk_key), *_key_mark(power_key))
+                               update_capacity, int(update_pending), *_key_mark(talk_key), *_key_mark(power_key),
+                               int(corner_radius))
         self._callbacks = self._make_callbacks(host, audio_host or host)
         self._handle = self._lib.hgsim_create(ctypes.byref(self._config), ctypes.byref(self._callbacks))
         if not self._handle:

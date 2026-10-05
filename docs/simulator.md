@@ -85,7 +85,7 @@ Like a board, the simulated device takes firmware updates (`hermes gadget update
 | `sim-240x240` | 240×240 | The 1.54" LCD board: two buttons, no scroll buttons, so long replies page by themselves |
 | `sim-240x240-nospeaker` | 240×240 | No speaker, so replies stay text only |
 | `sim-466x466-round` | 466×466 round | The 1.75" AMOLED touch board: hold the mouse on the screen to talk, click to answer yes, drag down to cancel. No scroll buttons, so long replies page by themselves |
-| `sim-368x448` | 368×448 | The 1.8" AMOLED touch board: like the round profile, plus the speaker button, the key icons on the right edge, a battery in the top bar (the Battery % slider sets it) and the power key (Ctrl+P) |
+| `sim-368x448` | 368×448, rounded corners | The 1.8" AMOLED touch board: like the round profile, plus the speaker button, the key icons on the right edge, a battery in the top bar (the Battery % slider sets it) and the power key (Ctrl+P) |
 
 Add a profile to `BOARDS` in `python/hermes_gadget/sim/runner.py` to mirror new hardware.
 

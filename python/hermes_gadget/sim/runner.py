@@ -43,6 +43,7 @@ class Board:
     talk_key: tuple[str, int] | None = None
     power_key: tuple[str, int] | None = None  # also turns the screen off and on (Simulator.power_key)
     battery: bool = False  # a power chip reports the battery, shown in the top bar
+    corner_radius: int = 0  # rounded glass corners: the screen loses them, the bars keep clear
 
 
 BOARDS = {
@@ -56,7 +57,7 @@ BOARDS = {
     "sim-466x466-round": Board("sim-466x466-round", 466, 466, scroll_buttons=False, round=True, touch=True),
     # A 1.8" 368x448 AMOLED touch board (e.g. ESP32-S3-Touch-AMOLED-1.8): no scroll buttons.
     "sim-368x448": Board("sim-368x448", 368, 448, scroll_buttons=False, touch=True,
-                         talk_key=("r", -100), power_key=("r", 100), battery=True),
+                         talk_key=("r", -100), power_key=("r", 100), battery=True, corner_radius=40),
 }
 
 
@@ -67,6 +68,15 @@ def _circle_spans(width: int, height: int) -> list[tuple[int, int]]:
         dy = y + 0.5 - height / 2
         half = (r * r - dy * dy) ** 0.5 if abs(dy) < r else 0.0
         spans.append((max(0, round(width / 2 - half)), min(width, round(width / 2 + half))))
+    return spans
+
+
+def _rounded_spans(width: int, height: int, radius: int) -> list[tuple[int, int]]:
+    spans = []
+    for y in range(height):
+        d = min(y + 0.5, height - y - 0.5)  # distance from the nearer edge
+        cut = radius - (radius * radius - (radius - d) ** 2) ** 0.5 if d < radius else 0.0
+        spans.append((round(cut), width - round(cut)))
     return spans
 
 
@@ -166,8 +176,11 @@ class Simulator:
             server_url=url, access_token=token, mic=b.mic, speaker=b.speaker, backlight=b.backlight,
             scroll_buttons=b.scroll_buttons, library=library, button_labels=button_labels,
             round_panel=b.round, touch_screen=b.touch, update_capacity=UPDATE_SLOT_BYTES,
-            update_pending=update_pending, talk_key=b.talk_key, power_key=b.power_key)
-        self._round_spans = _circle_spans(b.width, b.height) if b.round else None
+            update_pending=update_pending, talk_key=b.talk_key, power_key=b.power_key,
+            corner_radius=b.corner_radius)
+        # The lit part of each row on glass that isn't rectangular; None when all of it is.
+        self.glass_spans = (_circle_spans(b.width, b.height) if b.round else
+                            _rounded_spans(b.width, b.height, b.corner_radius) if b.corner_radius else None)
         self._register_actions()
 
     # -- Host implementation (called by the core) ---------------------------------------
@@ -451,12 +464,12 @@ class Simulator:
 
     def rgb888(self, y0: int = 0, y1: int | None = None) -> bytes:
         rgb = png.rgb565_to_rgb888(self.device.framebuffer_rows(y0, y1))
-        if self._round_spans is None:
+        if self.glass_spans is None:
             return rgb
-        # A round panel has no corners: show them black, as the glass would.
+        # Round or rounded glass has no corners: show them black, as the glass would.
         out, w = bytearray(rgb), self.board.width
         for i, y in enumerate(range(y0, y0 + len(rgb) // (3 * w))):
-            x0, x1 = self._round_spans[y]
+            x0, x1 = self.glass_spans[y]
             row = i * w * 3
             out[row: row + x0 * 3] = bytes(x0 * 3)
             out[row + x1 * 3: row + w * 3] = bytes((w - x1) * 3)

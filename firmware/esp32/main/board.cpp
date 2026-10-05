@@ -120,6 +120,7 @@ BoardConfig make() {
   b.amoled.d2 = 6;
   b.amoled.d3 = 7;
   b.amoled.gap_x = 16;  // the 368 columns start at 16 in the controller's RAM
+  b.amoled.corner_radius = 40;  // measured on the glass: the bars' text stays clear of it
   b.expander_resets = {true, 0x20, 0x87, 0x80};  // P0, P1, P2 and P7; P7 stays high
   b.i2c = {15, 14, 400000};
   b.codec.enabled = true;

@@ -90,6 +90,7 @@ typedef struct hgsim_config {
    * the edge, 'l' or 'r' (0 = no icon), and the offset in pixels from the vertical centre. */
   int talk_key_edge, talk_key_dy;
   int power_key_edge, power_key_dy;
+  int corner_radius; /* rounded glass corners in pixels (see hg::DisplayInfo::corner_radius) */
 } hgsim_config;
 
 /* Action handler: fill `result_json` (a JSON object) and return 1, or write an

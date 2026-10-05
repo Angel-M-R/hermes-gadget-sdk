@@ -44,6 +44,7 @@ struct AmoledConfig {
   int gap_x = 0, gap_y = 0;  // the controller's RAM is wider than the glass
   int qspi_mhz = 40;
   bool round = false;
+  int corner_radius = 0;  // rounded glass corners (hg::DisplayInfo::corner_radius)
 };
 
 struct I2cBusConfig {

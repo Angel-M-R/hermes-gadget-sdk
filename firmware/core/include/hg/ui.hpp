@@ -140,6 +140,9 @@ class Ui {
   bool hero_valid_ = false;
   bool valid_ = false;
   Circle speaker_;  // as last drawn, for speaker_hit
+  // Rounded corners: extra bar height above the top text and below the bottom
+  // text, and how far each bar's text keeps from the side edges.
+  int bar_pad_ = 0, top_inset_ = 0, bottom_inset_ = 0;
 };
 
 }  // namespace hg
