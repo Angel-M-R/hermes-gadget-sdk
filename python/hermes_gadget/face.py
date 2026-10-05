@@ -165,6 +165,8 @@ class Options:
     mouth_h: float = 0.045
     ear_cup: tuple[float, float] = (0.62, 0.30)
     think_dot: tuple[float, float] = (0.82, 0.11)
+    listen_waves: str = "right"  # which way the listening waves face
+    talk_waves: str = "left"     # which way the speaking waves face
 
 
 def _eye_box(spec, box) -> tuple[int, int, int, int]:
@@ -229,6 +231,7 @@ def measure(alpha, opts: Options) -> dict:
         "ear_cup": (x0 + w * opts.ear_cup[0], y0 + h * opts.ear_cup[1]),
         "mouth_pt": (mouth_cx, mouth_cy),
         "think_dot": (x0 + w * opts.think_dot[0], y0 + h * opts.think_dot[1]),
+        "dirs": (1 if opts.listen_waves == "right" else -1, 1 if opts.talk_waves == "right" else -1),
         "eyes_rows": (min(left[1], right[1]), max(left[3], right[3])),
         "mouth_rows": (round(mouth_cy - h * opts.mouth_h / 2 * 2.2),
                        round(mouth_cy + h * opts.mouth_h / 2 * 2.2)),
@@ -310,12 +313,15 @@ def emit(frames, anchors: dict, source: str, threshold: int = THRESHOLD) -> str:
         lines.append(f"    {{{size}, Frame::{frame.capitalize()}, {name}}},")
     ear, mouth, dot = anchors["ear_cup"], anchors["mouth_pt"], anchors["think_dot"]
     eyes, mouth_rows = anchors["eyes_rows"], anchors["mouth_rows"]
+    # Wave directions only when they differ from the mascot's, so its file stays as it was.
+    dirs = anchors.get("dirs", (1, -1))
+    tail = "" if dirs == (1, -1) else f", {dirs[0]}, {dirs[1]}"
     a = thousandths
     lines += [
         "};",
         "",
         f"const Anchors kAnchors = {{{{{a(ear[0])}, {a(ear[1])}}}, {{{a(mouth[0])}, {a(mouth[1])}}}, "
-        f"{{{a(dot[0])}, {a(dot[1])}}}, {a(eyes[0])}, {a(eyes[1])}, {a(mouth_rows[0])}, {a(mouth_rows[1])}}};",
+        f"{{{a(dot[0])}, {a(dot[1])}}}, {a(eyes[0])}, {a(eyes[1])}, {a(mouth_rows[0])}, {a(mouth_rows[1])}{tail}}};",
         "",
         "}  // namespace",
         "",

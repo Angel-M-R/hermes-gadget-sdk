@@ -688,14 +688,14 @@ void Ui::draw_hero(Canvas& c, const UiModel& m) {
   switch (m.screen) {
     case Screen::Listening: {
       int lit = 1 + std::min(2, m.level / 34);
-      waves(mx + size * a.ear_cup.x / 1000, my + size * a.ear_cup.y / 1000, +1, lit,
+      waves(mx + size * a.ear_cup.x / 1000, my + size * a.ear_cup.y / 1000, a.listen_dir, lit,
             static_cast<int>(m.frame % 3), kGreen, kGreenDim, 90);
       break;
     }
     case Screen::Responding:
       if (m.speaking) {
         // Start outside the face outline so the waves read as sound, not as lines on her cheek.
-        waves(mx + size * a.mouth.x / 1000, my + size * a.mouth.y / 1000, -1, 3,
+        waves(mx + size * a.mouth.x / 1000, my + size * a.mouth.y / 1000, a.talk_dir, 3,
               static_cast<int>((m.frame / 2) % 3), kAccent, kAccentDim, 130);
       }
       break;

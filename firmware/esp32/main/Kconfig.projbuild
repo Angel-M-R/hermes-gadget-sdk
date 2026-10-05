@@ -1,5 +1,13 @@
 menu "Hermes Gadget"
 
+    config HG_FACE
+        string "Face (empty: the shipped mascot)"
+        default ""
+        help
+            The name of a face in firmware/core/faces/, made with
+            `hermes-gadget face --out firmware/core/faces/<name>.cpp`.
+            Empty builds the shipped mascot. See docs/faces.md.
+
     menu "Defaults (overridable from the serial console)"
         config HG_DEFAULT_NAME
             string "Device name"

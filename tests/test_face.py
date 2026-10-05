@@ -154,6 +154,27 @@ def test_the_command_takes_a_picture_and_writes_a_face(tmp_path):
     assert (tmp_path / "c.png").exists(), "the geometry check is how features get placed"
 
 
+def test_wave_directions_are_written_only_when_they_differ_from_the_mascots(tmp_path):
+    Image = pytest.importorskip("PIL.Image")
+    src = tmp_path / "face.png"
+    img = Image.new("RGB", (128, 128), (0, 0, 0))
+    for x in range(30, 100):
+        for y in range(20, 110):
+            img.putpixel((x, y), (255, 255, 255))
+    img.save(src)
+
+    def anchors(*flags):
+        out = tmp_path / "face.cpp"
+        assert cli.main(["face", str(src), "--mask", "bright", *flags, "--out", str(out),
+                         "--preview", str(tmp_path / "p.png"), "--check", str(tmp_path / "c.png")]) == 0
+        return re.search(r"const Anchors kAnchors = \{(.*)\};", out.read_text()).group(1)
+
+    default = anchors()
+    assert default.count(",") == 9, "the mascot's directions leave the initialiser as it was"
+    assert anchors("--talk-waves", "right").endswith(", 1, 1")
+    assert anchors("--listen-waves", "left").endswith(", -1, -1")
+
+
 def test_the_command_wants_both_eyes_or_neither(tmp_path):
     Image = pytest.importorskip("PIL.Image")
     src = tmp_path / "face.png"

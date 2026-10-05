@@ -34,6 +34,11 @@ struct Anchors {
   Point head_top_right;  // "thinking" dots
   int16_t eyes_y0, eyes_y1;    // rows that change when blinking
   int16_t mouth_y0, mouth_y1;  // rows that change when talking
+  // Which way the waves face: 1 to the right, -1 to the left. The shipped
+  // mascot listens to the right and speaks to the left; a face looking the
+  // other way turns them round.
+  int8_t listen_dir = 1;
+  int8_t talk_dir = -1;
 };
 const Anchors& anchors();
 
