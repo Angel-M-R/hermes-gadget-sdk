@@ -21,8 +21,7 @@ def test_the_installer_link_carries_the_server_in_the_fragment():
     assert fragment.startswith("server=") and unquote(fragment[len("server="):]) == SERVER
 
 
-def _setup(monkeypatch, answer: str, extra: dict, *, writable: bool = True,
-           tts: dict | None = None, readable: bool = True):
+def _setup(monkeypatch, answer: str, extra: dict, *, writable: bool = True, failed_key: str | None = None):
     writes, shown = [], []
 
     def prompt(question, default=None, password=False):
@@ -30,9 +29,7 @@ def _setup(monkeypatch, answer: str, extra: dict, *, writable: bool = True,
         return answer or default
 
     monkeypatch.setattr(setup, "_ui", lambda: (shown.append, shown.append, shown.append, shown.append, prompt))
-    monkeypatch.setattr(setup, "_set_config", lambda key, value: writes.append((key, value)) or writable)
-    stock = {"provider": "edge", "edge": {"voice": "en-US-AriaNeural"}}
-    monkeypatch.setattr(setup, "_current_tts", lambda: (tts or {}, stock) if readable else None)
+    monkeypatch.setattr(setup, "_set_config", lambda key, value: writes.append((key, value)) or (writable and key != failed_key))
     monkeypatch.setattr(cli, "_gadget_extra", lambda: dict(extra))
     monkeypatch.setattr(cli, "_lan_address", lambda: "192.168.1.20")
     setup.interactive_setup()
@@ -62,31 +59,22 @@ def test_setup_says_what_to_run_when_it_cannot_write_the_config(monkeypatch):
     _, shown = _setup(monkeypatch, "", {}, writable=False)
     assert any("hermes config set platforms.gadget.enabled true" in line for line in shown)
     assert any(f"hermes config set {VOICE_SETTINGS[0][0]} {VOICE_SETTINGS[0][1]}" in line for line in shown)
-    assert not any("Initial voice:" in line for line in shown)
+    assert not any("Voice configured:" in line for line in shown)
 
 
-def test_setup_replaces_the_seeded_hermes_voice_and_reports_the_default(monkeypatch):
-    writes, shown = _setup(monkeypatch, "", {}, tts={"provider": "edge", "edge": {"voice": "en-US-AriaNeural"}})
+def test_setup_applies_the_branch_voice_and_reports_it(monkeypatch):
+    writes, shown = _setup(monkeypatch, "", {})
     assert writes[-2:] == VOICE_SETTINGS
-    assert any(f"Initial voice: {setup.DEFAULT_TTS_NAME}" in line for line in shown)
+    assert any(f"Voice configured: {setup.DEFAULT_TTS_NAME}" in line for line in shown)
     assert any("including other chats" in line for line in shown)
 
 
-@pytest.mark.parametrize("tts", [
-    {"provider": "edge", "edge": {"voice": "es-ES-ElviraNeural", "speed": 1.2}},
-    {"provider": "piper", "piper": {"voice": "es_ES-davefx-medium"}},
-    {"provider": "openai", "openai": {"voice": "nova"}},
-])
-def test_setup_preserves_a_selected_voice_or_provider(monkeypatch, tts):
-    writes, shown = _setup(monkeypatch, "", {}, tts=tts)
-    assert writes == [("platforms.gadget.enabled", "true")]
-    assert "Keeping your configured speech provider and voice." in shown
-
-
-def test_setup_does_not_overwrite_speech_when_config_cannot_be_read(monkeypatch):
-    writes, shown = _setup(monkeypatch, "", {}, readable=False)
-    assert writes == [("platforms.gadget.enabled", "true")]
-    assert any("current voice was left unchanged" in line for line in shown)
+def test_setup_does_not_switch_provider_if_the_voice_write_fails(monkeypatch):
+    writes, shown = _setup(monkeypatch, "", {}, failed_key=VOICE_SETTINGS[0][0])
+    assert writes == [("platforms.gadget.enabled", "true"), VOICE_SETTINGS[0]]
+    for key, value in VOICE_SETTINGS:
+        assert any(f"hermes config set {key} {value}" in line for line in shown)
+    assert not any("Voice configured:" in line for line in shown)
 
 
 class FakeDevices:

@@ -12,14 +12,14 @@ hermes gateway setup
 
 Choose **Hermes Gadget**. Restart the gateway when setup asks. Setup prints a device address and an installer link with that address filled in.
 
-On this branch, new setups use **Davefx, Spanish from Spain**, through Piper
+Setup on this branch selects **Davefx, Spanish from Spain**, through Piper
 (`es_ES-davefx-medium`). Enabling the plugin installs its declared `piper-tts`
 dependency through Hermes's package manager. Accept the dependency prompt during
 installation; automated installs can add `--yes-deps`.
 
-Setup replaces Hermes's stock Edge voice only. An already selected voice or a
-different TTS provider is preserved, including when setup is repeated. Voice
-settings belong to the Hermes host and also affect other chats using that host's
+Every setup run overwrites the current TTS provider and voice with this branch's
+values, including existing installations and repeated setup. Voice settings
+belong to the Hermes host and also affect other chats using that host's
 TTS configuration. Install `ffmpeg` on that computer to decode speech for the
 gadget. The voice model downloads on the first spoken reply; subsequent speech
 is generated offline on the Hermes host, not on the ESP32. No API key is needed.

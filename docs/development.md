@@ -78,7 +78,7 @@ hermes gateway run
 
 `--link` falls back to copying where symlinks need extra privileges (Windows without Developer Mode). Re-run the install after editing in that case.
 
-The plugin declares the speech engine for its branch's initial voice as a Python dependency. Enable it through `hermes plugins enable gadget` so Hermes prepares that dependency with its other packages, then restart the gateway in Hermes's selected environment. Writing `plugins.enabled` directly does not install the engine. Run `hermes gateway setup` and choose Hermes Gadget to initialize the voice and platform; a firmware flash alone does not set host speech preferences.
+The plugin declares the speech engine for its branch's voice as a Python dependency. Enable it through `hermes plugins enable gadget` so Hermes prepares that dependency with its other packages, then restart the gateway in Hermes's selected environment. Writing `plugins.enabled` directly does not install the engine. Run `hermes gateway setup` and choose Hermes Gadget to configure the platform and apply the branch's TTS provider and voice. Each setup run overwrites those speech settings, including in existing installations. A firmware flash alone does not set host speech preferences.
 
 ## Working on the firmware
 

@@ -2,7 +2,7 @@
 
 The wizard runs it when the user picks Hermes Gadget (``register_platform(setup_fn=...)``) and
 offers to restart the gateway afterwards. This enables the platform, asks for the port,
-selects the branch's initial voice, and points at the browser installer and pairing command.
+applies the branch's voice on every setup, and points at the browser installer and pairing command.
 """
 
 from __future__ import annotations
@@ -13,34 +13,6 @@ DEFAULT_PORT = 8765
 DEFAULT_TTS_PROVIDER = "piper"
 DEFAULT_TTS_VOICE = "es_ES-davefx-medium"
 DEFAULT_TTS_NAME = "Davefx (Spanish, Spain)"
-
-
-def _current_tts():
-    """Read both effective speech settings and Hermes's stock defaults before writing anything."""
-    try:
-        from hermes_cli.config import DEFAULT_CONFIG, load_config
-
-        return (load_config().get("tts") or {}, DEFAULT_CONFIG.get("tts") or {})
-    except Exception:
-        return None
-
-
-def _initial_voice_settings(state):
-    """Replace only Hermes's untouched stock Edge voice, preserving a selected provider or voice."""
-    if state is None:
-        return []
-    current, stock = state
-    stock_provider = stock.get("provider") or "edge"
-    provider = current.get("provider") or stock_provider
-    if provider != "edge" or stock_provider != "edge":
-        return []
-    stock_voice = (stock.get("edge") or {}).get("voice")
-    voice = (current.get("edge") or {}).get("voice")
-    if voice and voice != stock_voice:
-        return []
-    # Persist the voice first: a failed write must not activate Piper with the wrong model.
-    return [(f"tts.{DEFAULT_TTS_PROVIDER}.voice", DEFAULT_TTS_VOICE),
-            ("tts.provider", DEFAULT_TTS_PROVIDER)]
 
 
 def _ui():
@@ -78,7 +50,6 @@ def interactive_setup() -> None:
     print_info("Small ESP32 devices with a screen, microphone and speaker that talk to this Hermes over your network.")
 
     extra = cli._gadget_extra()
-    tts_state = _current_tts()
     current = int(extra.get("port") or DEFAULT_PORT)
     answer = prompt("Port devices connect to", default=str(current))
     try:
@@ -97,18 +68,15 @@ def interactive_setup() -> None:
     else:
         print_warning("Couldn't update config.yaml from here. Run: hermes config set platforms.gadget.enabled true")
 
-    voice_settings = _initial_voice_settings(tts_state)
-    if voice_settings:
-        if all(_set_config(key, value) for key, value in voice_settings):
-            print_success(f"Initial voice: {DEFAULT_TTS_NAME} ({DEFAULT_TTS_PROVIDER})")
-        else:
-            print_warning("Couldn't configure the initial voice. Run these commands on the Hermes host:")
-            for key, value in voice_settings:
-                print_info(f"  hermes config set {key} {value}")
-    elif tts_state is None:
-        print_warning("Couldn't read the speech configuration; the current voice was left unchanged.")
+    # Persist the voice first: a failed write must not activate a provider with the wrong voice.
+    voice_settings = [(f"tts.{DEFAULT_TTS_PROVIDER}.voice", DEFAULT_TTS_VOICE),
+                      ("tts.provider", DEFAULT_TTS_PROVIDER)]
+    if all(_set_config(key, value) for key, value in voice_settings):
+        print_success(f"Voice configured: {DEFAULT_TTS_NAME} ({DEFAULT_TTS_PROVIDER})")
     else:
-        print_info("Keeping your configured speech provider and voice.")
+        print_warning("Couldn't configure the branch voice. Run these commands on the Hermes host:")
+        for key, value in voice_settings:
+            print_info(f"  hermes config set {key} {value}")
     print_info("Voice settings apply to this Hermes host, including other chats that use its TTS configuration.")
     if DEFAULT_TTS_PROVIDER == "piper":
         print_info("Piper downloads its voice model on the first spoken reply, then synthesizes offline on the Hermes host.")
