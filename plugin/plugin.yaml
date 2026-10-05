@@ -12,8 +12,10 @@ description: >
   actions (LEDs, relays, displays) through the gadget tools.
 author: Hermes Gadget SDK contributors
 license: MIT
+# Hermes's own piper extra pins one exact version; a range here that excludes it
+# makes Hermes refuse to enable the plugin, so take whichever it has.
 python_dependencies:
-  - "piper-tts>=1.4.2,<2"
+  - "piper-tts"
 tags: [gateway, hardware, esp32, voice, iot]
 provides_tools:
   - gadget_devices
