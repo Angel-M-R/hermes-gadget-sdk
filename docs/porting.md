@@ -61,6 +61,7 @@ Implement `hg::Display` (`firmware/core/include/hg/hal.hpp`):
 | `framebuffer()` | A width × height RGB565 buffer you own (PSRAM on ESP32) |
 | `flush(y0, y1)` | Push full-width rows `[y0, y1)` to the panel |
 | `set_backlight(percent)` | Optional |
+| `set_sleep(asleep)` | Optional. Called after `set_backlight(0)` when the screen goes dark, and before the backlight returns. Nothing is drawn meanwhile and the whole screen is redrawn after waking, so the port may stop the panel and parts that only serve the screen. `AmoledDisplay` sends the CO5300's sleep in and sleep out when `AmoledConfig::sleep_when_dark` is set, and runs its `board_sleep` hook for the touch controller and processor clock |
 
 `SpiDisplay` in `port_display.cpp` is the reference. To add ILI9341, GC9A01 or another panel, swap `esp_lcd_new_panel_st7789` for the matching `esp_lcd` driver (most are managed components). For RGB/parallel or QSPI AMOLED panels, the same interface applies with that panel's `esp_lcd` IO.
 
@@ -81,7 +82,7 @@ The AXP2101 implementation is in `firmware/drivers/axp2101.cpp`, with the ESP32 
 
 CoreS3 has a separate `CoreS3Control` in `firmware/drivers/cores3.cpp`. It enables the required audio supplies, boost and AW9523 reset outputs before display, touch and audio initialization. Its masked writes preserve unrelated settings. `SpiDisplay::board_backlight` routes brightness through DLDO1 on this board. Native tests cover supply values, reset timing, preservation of other registers, brightness and failed I2C access. `CodecAudioConfig::speaker` selects the AW88298 driver for CoreS3; other profiles keep ES8311.
 
-A display that advertises `has_backlight` must accept zero percent to turn dark. `screen_timeout` dims and then darkens an idle display while keeping the device connected. Raw touch drivers should use `TouchGestures`, which consumes the first touch when waking. Button input through `App::on_button` does the same.
+A display that advertises `has_backlight` must accept zero percent to turn dark. `screen_timeout` dims and then darkens an idle display while keeping the device connected. Raw touch drivers should use `TouchGestures`, which consumes the first touch when waking. Button input through `App::on_button` does the same. A touch controller that sleeps with the screen must report a lifted finger before it stops reading, so a hold does not stay pressed.
 
 ## Audio through a codec chip
 

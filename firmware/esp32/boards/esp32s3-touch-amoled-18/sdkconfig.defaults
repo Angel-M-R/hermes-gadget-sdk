@@ -12,6 +12,9 @@ CONFIG_SPIRAM_USE_MALLOC=y
 # If PSRAM ever fails to start, boot anyway so the log and `diag` can say so.
 CONFIG_SPIRAM_IGNORE_NOTFOUND=y
 CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
+# Power management for the processor's clock: full speed while the screen is lit,
+# down to 80 MHz while it is dark (hgp::cpu in port_system.cpp). No light sleep.
+CONFIG_PM_ENABLE=y
 # The USB-C port is the S3's own USB Serial/JTAG, and UART0 only reaches the header.
 # The console must live on USB: a secondary console is output-only, so commands
 # typed over USB would never arrive.

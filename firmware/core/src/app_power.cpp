@@ -10,6 +10,7 @@ bool App::wake_display() {
   const bool sleeping = display_sleeping_;
   if (display_dimmed_ || sleeping) {
     display_dimmed_ = display_sleeping_ = false;
+    if (sleeping) hal_.display->set_sleep(false);
     hal_.display->set_backlight(brightness_);
     if (ui_) ui_->invalidate();
     update_model();
@@ -21,6 +22,13 @@ void App::wake_for_activity() {
   if (!display_off_by_user_) wake_display();
 }
 
+void App::darken_display() {
+  display_sleeping_ = true;
+  display_dimmed_ = false;
+  hal_.display->set_backlight(0);
+  hal_.display->set_sleep(true);
+}
+
 void App::on_power_key() {
   if (!hal_.display || !hal_.display->info().has_backlight) return;
   if (display_sleeping_) {
@@ -29,9 +37,8 @@ void App::on_power_key() {
   }
   // Phone setup's password and an update's progress stay on screen.
   if (!wifi_setup_text_.empty() || ota_busy() || ota_ == Ota::Restarting) return;
-  display_off_by_user_ = display_sleeping_ = true;
-  display_dimmed_ = false;
-  hal_.display->set_backlight(0);
+  display_off_by_user_ = true;
+  darken_display();
 }
 
 void App::power_tick() {
@@ -54,8 +61,7 @@ void App::power_tick() {
   if (!idle) { wake_display(); return; }
   const uint32_t elapsed = now() - activity_at_;
   if (elapsed >= screen_timeout_ms_ && !display_sleeping_) {
-    display_sleeping_ = true;
-    hal_.display->set_backlight(0);
+    darken_display();
   } else if (elapsed >= screen_timeout_ms_ / 2 && !display_dimmed_ && !display_sleeping_) {
     display_dimmed_ = true;
     hal_.display->set_backlight(std::min<uint8_t>(brightness_, 10));

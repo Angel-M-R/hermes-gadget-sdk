@@ -186,4 +186,13 @@ void AmoledDisplay::set_backlight(uint8_t percent) {
   command(0x51, &level, 1);
 }
 
+void AmoledDisplay::set_sleep(bool asleep) {
+  if (!cfg_.sleep_when_dark) return;
+  if (!asleep && board_sleep) board_sleep(false);  // the processor at full speed for the redraw
+  command(asleep ? 0x10 : 0x11, nullptr, 0);       // sleep in / sleep out
+  // The controller needs this long before its next sleep command or pixels.
+  vTaskDelay(pdMS_TO_TICKS(120));
+  if (asleep && board_sleep) board_sleep(true);
+}
+
 }  // namespace hgp

@@ -161,6 +161,7 @@ extern "C" void app_main(void) {
   }
 #endif
   g_updater.start();  // a new firmware on probation starts its clock now
+  hgp::cpu::begin();
 
   // Wi-Fi first: the radio is the entropy source for the device key.
   g_wifi.begin(g_storage);
@@ -199,6 +200,12 @@ extern "C" void app_main(void) {
   g_buttons.begin(board.buttons);
   const bool touch = peripherals_ready && (board.touch.enabled || board.pwr_key.enabled) &&
                      g_touch.begin(board.touch, board.pwr_key, i2c_bus);
+  if (hal.display == &g_amoled && board.amoled.sleep_when_dark) {
+    g_amoled.board_sleep = [](bool asleep) {
+      g_touch.set_sleep(asleep);
+      hgp::cpu::set_full_speed(!asleep);
+    };
+  }
 
   hgp::diag::Parts parts;
   parts.display = hal.display == &g_display ? g_display.controller_name()
@@ -226,6 +233,7 @@ extern "C" void app_main(void) {
   profile.has_scroll_buttons = board.buttons.up >= 0 && board.buttons.down >= 0;
   profile.talk_label = board.talk_label;
   profile.cancel_label = board.cancel_label;
+  profile.talk_release_grace_ms = board.talk_release_grace_ms;
   profile.talk_key = {board.talk_key.edge, board.talk_key.dy};
   if (power_key) profile.power_key = {board.power_key.edge, board.power_key.dy};
   if (touch && board.touch.enabled) {

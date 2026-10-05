@@ -15,7 +15,7 @@ constexpr uint32_t kConnectTimeoutMs = 10000;
 constexpr uint32_t kHandshakeTimeoutMs = 10000;
 constexpr uint32_t kStableSessionMs = 30000;
 constexpr uint32_t kMinUtteranceMs = 350;
-constexpr uint32_t kMaxUtteranceMs = 30000;
+constexpr uint32_t kMaxUtteranceMs = 60000;  // the hub's default max_utterance_s
 constexpr uint32_t kThinkingTimeoutMs = 180000;
 constexpr uint32_t kSettleAfterReplyMs = 6000;
 constexpr uint32_t kReplyLingerMs = 20000;    // reply text stays up this long before the mascot returns
@@ -104,10 +104,14 @@ void App::load_settings() {
   muted_ = setting("mute", "0") == "1";
   apply_volume();
   brightness_ = static_cast<uint8_t>(std::max(5, std::min(100, std::atoi(setting("brightness", "100").c_str()))));
+  // A setting changed over USB lights a dark screen again.
+  const bool was_dark = display_sleeping_;
+  if (was_dark) hal_.display->set_sleep(false);
   if (hal_.display && hal_.display->info().has_backlight) hal_.display->set_backlight(brightness_);
   screen_timeout_ms_ = static_cast<uint32_t>(std::max(0, std::min(3600, std::atoi(setting("screen_timeout", "0").c_str())))) * 1000;
   activity_at_ = now();
   display_dimmed_ = display_sleeping_ = display_off_by_user_ = false;
+  if (was_dark && ui_) ui_->invalidate();
 }
 
 void App::add_action(Action action) {
@@ -760,6 +764,12 @@ void App::on_button(Button button, bool pressed) {
   switch (button) {
     case Button::Talk:
       if (pressed) {
+        if (talk_release_pending_ && mode_ == Mode::Listening) {
+          // The key only slipped: the same recording goes on.
+          talk_release_pending_ = false;
+          log(LogLevel::Info, "talk key slipped for " + std::to_string(now() - talk_up_at_) + " ms; still held");
+          break;
+        }
         if (cancel_held_) return;  // wait for the local settings chord
         if (!can_talk()) {
           set_hint_flash(phase_ == Phase::Online ? "Approve pairing first" : "Not connected to Hermes");
@@ -775,12 +785,12 @@ void App::on_button(Button button, bool pressed) {
         }
         start_listening(talk_mode_ == TalkMode::Tap);
       } else if (mode_ == Mode::Listening && !hands_free_) {
-        if (now() - mode_since_ < kMinUtteranceMs) {
-          cancel_listening("too short");
-          set_hint_flash(profile_.touch_screen ? "Hold the screen while speaking"
-                                               : "Hold " + profile_.talk_label + " while speaking");
+        if (profile_.talk_release_grace_ms) {
+          // tick() ends the recording unless TALK comes back in time.
+          talk_release_pending_ = true;
+          talk_up_at_ = now();
         } else {
-          finish_listening();
+          release_talk(now());
         }
       }
       break;
@@ -791,7 +801,7 @@ void App::on_button(Button button, bool pressed) {
         cancel_held_ = true;
         cancel_down_at_ = now();
         cancel_long_fired_ = false;
-        if (talk_held_ && mode_ == Mode::Listening) cancel_listening("cancelled");
+        if ((talk_held_ || talk_release_pending_) && mode_ == Mode::Listening) cancel_listening("cancelled");
         return;
       }
       if (!cancel_held_) return;
@@ -852,6 +862,7 @@ void App::start_listening(bool hands_free) {
     return;
   }
   hands_free_ = hands_free;
+  talk_release_pending_ = false;
   mic_stream_ = static_cast<uint8_t>(mic_stream_ % 250 + 1);
   mic_seq_ = 0;
   request_id_ = next_id('a');
@@ -872,6 +883,16 @@ void App::start_listening(bool hands_free) {
   status_.clear();
   user_echo_.clear();
   scroll_ = -1;
+}
+
+void App::release_talk(uint32_t released_at) {
+  if (released_at - mode_since_ < kMinUtteranceMs) {
+    cancel_listening("too short");
+    set_hint_flash(profile_.touch_screen ? "Hold the screen while speaking"
+                                         : "Hold " + profile_.talk_label + " while speaking");
+  } else {
+    finish_listening();
+  }
 }
 
 void App::finish_listening() {
@@ -1287,6 +1308,13 @@ void App::tick() {
     update_model();
   }
 
+  if (talk_release_pending_ && (mode_ != Mode::Listening || t - talk_up_at_ >= profile_.talk_release_grace_ms)) {
+    talk_release_pending_ = false;
+    if (mode_ == Mode::Listening) {
+      release_talk(talk_up_at_);
+      update_model();
+    }
+  }
   if (mode_ == Mode::Listening && t - mode_since_ > kMaxUtteranceMs) {
     finish_listening();
     update_model();

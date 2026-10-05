@@ -82,6 +82,14 @@ struct FakeHal : hg::Display, hg::AudioIn, hg::AudioOut, hg::Transport, hg::Stor
   }
   uint16_t* framebuffer() override { return fb.data(); }
   void set_backlight(uint8_t percent) override { brightness = percent; }
+  bool asleep = false;
+  int sleep_changes = 0;
+  int brightness_at_sleep_change = -1;  // the backlight when the panel last slept or woke
+  void set_sleep(bool a) override {
+    asleep = a;
+    ++sleep_changes;
+    brightness_at_sleep_change = brightness;
+  }
   void flush(uint16_t y0, uint16_t y1) override {
     ++flushes;
     flushed_rows += y1 - y0;
@@ -117,6 +125,12 @@ struct FakeHal : hg::Display, hg::AudioIn, hg::AudioOut, hg::Transport, hg::Stor
     for (auto it = sent.rbegin(); it != sent.rend(); ++it)
       if ((*it)["type"].as_string() == type) return &*it;
     return nullptr;
+  }
+
+  int count(const std::string& type) const {
+    int n = 0;
+    for (const auto& m : sent) n += m["type"].as_string() == type;
+    return n;
   }
 };
 
@@ -317,6 +331,68 @@ TEST("app: a short tap is discarded instead of sent") {
   CHECK(r.fake.last("audio.cancel") != nullptr);
   CHECK(r.fake.last("audio.end") == nullptr);
   CHECK(r.app.screen() == hg::Screen::Ready);
+}
+
+TEST("app: a held recording runs for up to a minute") {
+  Rig r;
+  r.bring_online(true);
+  r.app.on_button(hg::Button::Talk, true);
+  for (int i = 0; i < 5; ++i) {
+    r.advance(10000);
+    r.server(R"({"type":"ping"})");
+  }
+  CHECK(r.fake.mic_on);
+  CHECK(r.fake.last("audio.end") == nullptr);
+  r.advance(10100);
+  CHECK(!r.fake.mic_on);
+  const Value* end = r.fake.last("audio.end");
+  CHECK(end != nullptr);
+  if (end) CHECK((*end)["duration_ms"].as_int() > 60000);
+  CHECK(r.app.screen() == hg::Screen::Thinking);
+}
+
+TEST("app: a TALK key that slips mid-recording keeps one recording") {
+  hg::DeviceProfile p = Rig::profile("ws://hermes.local:8765/gadget");
+  p.talk_release_grace_ms = 400;
+  Rig r(p);
+  r.bring_online(true);
+  r.app.on_button(hg::Button::Talk, true);
+  r.advance(1000);
+  r.app.on_button(hg::Button::Talk, false);
+  r.advance(200);
+  CHECK(r.fake.mic_on);  // still recording through the slip
+  r.app.on_button(hg::Button::Talk, true);
+  r.advance(1000);
+  CHECK(r.app.screen() == hg::Screen::Listening);
+  r.app.on_button(hg::Button::Talk, false);
+  r.advance(300);
+  CHECK(r.fake.last("audio.end") == nullptr);
+  r.advance(200);
+  CHECK(!r.fake.mic_on);
+  CHECK_EQ(r.fake.count("audio.start"), 1);
+  CHECK_EQ(r.fake.count("audio.end"), 1);
+  CHECK(r.app.screen() == hg::Screen::Thinking);
+
+  // A tap is still discarded, measured to the release rather than the end of the grace.
+  r.app.on_button(hg::Button::Talk, true);
+  r.advance(100);
+  r.app.on_button(hg::Button::Talk, false);
+  r.advance(500);
+  CHECK_EQ(r.fake.count("audio.cancel"), 1);
+  CHECK_EQ(r.fake.count("audio.end"), 1);
+  CHECK_EQ(r.app.model().hint, std::string("Hold TALK while speaking"));
+
+  // CANCEL while TALK is up throws the recording away; the grace sends nothing.
+  r.app.on_button(hg::Button::Talk, true);
+  r.advance(1000);
+  r.app.on_button(hg::Button::Talk, false);
+  r.advance(100);
+  r.app.on_button(hg::Button::Cancel, true);
+  CHECK(!r.fake.mic_on);
+  r.advance(1000);
+  r.app.on_button(hg::Button::Cancel, false);
+  CHECK_EQ(r.fake.count("audio.cancel"), 2);
+  CHECK_EQ(r.fake.count("audio.end"), 1);
 }
 
 TEST("app: reply audio plays through the speaker and barge-in stops it") {
@@ -1281,6 +1357,48 @@ TEST("power: idle screen dims, sleeps and consumes the wake input without record
   CHECK(r.app.screen() == hg::Screen::Prompt);
   r.advance(30000);
   CHECK_EQ(r.fake.brightness, 100);
+}
+
+TEST("power: a dark screen sleeps the panel, which wakes before its backlight returns") {
+  Rig r;
+  r.fake.backlight = true;
+  r.bring_online(true);
+  r.app.on_power_key();
+  CHECK(r.fake.asleep);
+  CHECK_EQ(r.fake.brightness_at_sleep_change, 0);
+  r.server(R"({"type":"turn.start","turn":"a1"})");
+  r.server(R"({"type":"reply","turn":"a1","text":"Said with the screen off."})");
+  r.server(R"({"type":"turn.end","turn":"a1","outcome":"success"})");
+  r.advance(1000);
+  CHECK(r.fake.asleep);
+  CHECK_EQ(r.fake.sleep_changes, 1);
+  r.app.on_power_key();
+  CHECK(!r.fake.asleep);
+  CHECK_EQ(r.fake.brightness_at_sleep_change, 0);
+  CHECK_EQ(r.fake.brightness, 100);
+
+  // The idle timer: dimming leaves the panel awake, going dark puts it to sleep.
+  r.app.console("set screen_timeout 30");
+  r.advance(15000);
+  CHECK_EQ(r.fake.brightness, 10);
+  CHECK(!r.fake.asleep);
+  r.server(R"({"type":"ping"})");
+  r.advance(15000);
+  CHECK(r.fake.asleep);
+  CHECK_EQ(r.fake.sleep_changes, 3);
+  r.app.on_button(hg::Button::Talk, true);
+  CHECK(!r.fake.asleep);
+  CHECK_EQ(r.fake.brightness, 100);
+  r.app.on_button(hg::Button::Talk, false);
+
+  // A setting changed over USB lights it again.
+  r.app.on_power_key();
+  CHECK(r.fake.asleep);
+  r.app.console("set brightness 60");
+  CHECK(!r.fake.asleep);
+  CHECK_EQ(r.fake.brightness_at_sleep_change, 0);
+  CHECK_EQ(r.fake.brightness, 60);
+  CHECK_EQ(r.fake.sleep_changes, 6);
 }
 
 TEST("power: failed readings replace stale data and shutdown requires a second local selection") {

@@ -43,6 +43,12 @@ struct DeviceProfile {
   bool has_scroll_buttons = false;
   std::string talk_label = "TALK";
   std::string cancel_label = "CANCEL";
+  // A TALK key that lifts for a moment under the thumb holding it (the
+  // AMOLED-1.8's small BOOT key). While a held recording runs, a release
+  // counts only once TALK has stayed up this long; a press before then
+  // continues the same recording. Applies to every TALK release, holding the
+  // screen included. 0 ends the recording at the release.
+  uint16_t talk_release_grace_ms = 0;
   // The screen stands in for the buttons (hold to talk, tap to answer yes,
   // swipe to cancel); on-screen hints are worded for touch.
   bool touch_screen = false;
@@ -195,6 +201,8 @@ class App {
   void apply_volume();
   // Wakes the screen for something Hermes does, unless the user switched it off.
   void wake_for_activity();
+  // Turns the screen dark, the panel's sleep included.
+  void darken_display();
   void power_tick();
   json::Value power_value() const;
   json::Value status_value() const;
@@ -207,6 +215,8 @@ class App {
   void send_hello();
   bool can_talk() const;
   void start_listening(bool hands_free);
+  // TALK let go of a held recording at `released_at`: sends it, or discards a tap.
+  void release_talk(uint32_t released_at);
   void finish_listening();
   void cancel_listening(std::string_view why);
   void stop_playback();
@@ -258,6 +268,8 @@ class App {
   bool talk_held_ = false;
   bool settings_chord_fired_ = false;
   uint32_t talk_down_at_ = 0;
+  bool talk_release_pending_ = false;  // TALK is up, within talk_release_grace_ms
+  uint32_t talk_up_at_ = 0;
   std::optional<PowerStatus> power_status_;
   uint32_t power_read_at_ = 0, activity_at_ = 0;
   uint32_t screen_timeout_ms_ = 0;

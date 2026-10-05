@@ -43,6 +43,11 @@ class Display {
   // Push rows [y0, y1) to the panel. Rows are contiguous in the framebuffer.
   virtual void flush(uint16_t y0, uint16_t y1) = 0;
   virtual void set_backlight(uint8_t percent) { (void)percent; }
+  // The screen went dark (the idle timer or the power key), or is lighting
+  // again: called after set_backlight(0), and before the backlight returns.
+  // Nothing is drawn while it is dark and the whole screen is redrawn after
+  // waking, so a port may stop the panel and what only serves the screen.
+  virtual void set_sleep(bool asleep) { (void)asleep; }
 };
 
 // Microphone: after start() succeeds, the port delivers mono PCM16 samples at

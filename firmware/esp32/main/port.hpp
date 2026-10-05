@@ -204,6 +204,10 @@ class AmoledDisplay final : public hg::Display {
   uint16_t* framebuffer() override { return fb_; }
   void flush(uint16_t y0, uint16_t y1) override;
   void set_backlight(uint8_t percent) override;
+  // With AmoledConfig::sleep_when_dark: the panel sleeps, and board_sleep
+  // rests the board's other parts (first on waking, last on sleeping).
+  void set_sleep(bool asleep) override;
+  std::function<void(bool asleep)> board_sleep;
 
  private:
   static bool on_trans_done(esp_lcd_panel_io_handle_t io, esp_lcd_panel_io_event_data_t* edata, void* ctx);
@@ -281,17 +285,25 @@ class TouchInput {
   bool begin(const TouchConfig& touch, const ExpanderKeyConfig& key, i2c_master_bus_handle_t bus);
   bool has_touch() const { return touch_dev_ != nullptr || managed_touch_ != nullptr; }
   bool has_key() const { return key_dev_ != nullptr; }
+  // A dark screen: a CST820 with an expander reset sleeps until the screen
+  // lights again, reporting a lifted finger first. Other controllers keep
+  // running. The touch task carries it out; this only asks.
+  void set_sleep(bool asleep) { sleep_wanted_ = asleep; }
 
  private:
   static void task(void* arg);
   bool read_touch(TouchSample& out);
   bool begin_box_touch(i2c_master_bus_handle_t bus);
   bool read_key(bool& pressed);
+  bool can_sleep() const;
+  bool reset_cst820();
   TouchConfig touch_{};
   ExpanderKeyConfig key_{};
   i2c_master_dev_handle_t touch_dev_ = nullptr;
   i2c_master_dev_handle_t key_dev_ = nullptr;
   esp_lcd_touch_handle_t managed_touch_ = nullptr;
+  std::atomic<bool> sleep_wanted_{false};
+  bool asleep_ = false;  // touch task only
 };
 
 class AxpPower final : public hg::Power {
@@ -409,6 +421,15 @@ class Wifi {
 namespace console {
 // Starts the serial console REPL; lines are executed by hg::App::console on the app task.
 void begin();
+}
+
+namespace cpu {
+// With CONFIG_PM_ENABLE in the board's sdkconfig: the processor runs at full
+// speed while something holds it there, else at 80 MHz. begin() holds it;
+// set_full_speed(false) lets go while the screen is dark. Without power
+// management both do nothing.
+void begin();
+void set_full_speed(bool on);
 }
 
 namespace diag {
