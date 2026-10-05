@@ -122,8 +122,14 @@ class App {
   bool start_wifi_setup();
   void close_wifi_setup();
   bool wifi_setup_open() const { return !wifi_setup_text_.empty(); }
-  // These run on the app task. Start returns private, on-screen instructions.
-  std::function<std::string()> on_wifi_setup;
+  // These run on the app task. Start returns private, on-screen instructions
+  // (empty when setup can't start) and, for a QR code beside them, the text
+  // that joins the setup network (wifi_join_code).
+  struct WifiSetup {
+    std::string text;
+    std::string join_code;
+  };
+  std::function<WifiSetup()> on_wifi_setup;
   std::function<void()> on_wifi_setup_close;
 
   // Serial-console command (provisioning, bench automation). Returns the
@@ -264,7 +270,7 @@ class App {
   Menu menu_ = Menu::Closed;
   HardwareCheck hardware_check_ = HardwareCheck::None;
   std::string check_result_;
-  std::string wifi_setup_text_;
+  std::string wifi_setup_text_, wifi_setup_code_;
   bool talk_held_ = false;
   bool settings_chord_fired_ = false;
   uint32_t talk_down_at_ = 0;

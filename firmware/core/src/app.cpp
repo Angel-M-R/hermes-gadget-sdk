@@ -1389,6 +1389,7 @@ void App::update_model() {
   m.code.clear();
   m.detail.clear();
   m.body.clear();
+  m.qr.clear();
   m.yes.clear();
   m.no.clear();
   m.hero = false;
@@ -1427,6 +1428,7 @@ void App::update_model() {
     m.headline = "Wi-Fi setup";
     m.detail = "Connect your phone";
     m.body = wifi_setup_text_;
+    m.qr = wifi_setup_code_;
     m.scroll = 0;
     m.hint = profile_.touch_screen ? "Swipe down to close" : profile_.cancel_label + " to close";
     if (ui_) ui_->render(m);

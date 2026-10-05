@@ -294,7 +294,8 @@ void Ui::render(const UiModel& m) {
                   .val(m.muted)
                   .val(m.speaker_pressed)
                   .get();
-  hashes[2] = Hash().val(m.screen).add(m.detail).add(m.body).add(m.code).val(m.scroll).val(m.color_test).get();
+  hashes[2] =
+      Hash().val(m.screen).add(m.detail).add(m.body).add(m.qr).add(m.code).val(m.scroll).val(m.color_test).get();
   hashes[3] = Hash().add(m.hint).get();
 
   if (m.hero) {
@@ -574,6 +575,7 @@ void Ui::draw_content(Canvas& c, const UiModel& m) {
     }
   }
   if (m.body.empty() || rows <= 0) return;
+  if (!m.qr.empty() && draw_qr_body(c, m, y, y1)) return;
 
   auto lines = wrap_text(m.body, layout_.body_cols);
   int total = static_cast<int>(lines.size());
@@ -591,6 +593,73 @@ void Ui::draw_content(Canvas& c, const UiModel& m) {
     c.fill_rect(w - 2 * s, track_y, s, track_h, kFaint);
     c.fill_rect(w - 2 * s, thumb_y, s, thumb_h, kDim);
   }
+}
+
+bool Ui::draw_qr_body(Canvas& c, const UiModel& m, int top, int bottom) {
+  if (m.qr != qr_text_) {
+    qr_text_ = m.qr;
+    qr_ = QrCode::encode(m.qr);
+  }
+  if (!qr_.size()) return false;
+  const int s = layout_.scale, margin = 4 * s;
+  const int quiet = 2;  // light modules around the code; the screen beyond is dark
+  const int n = qr_.size() + 2 * quiet;
+  const int avail_w = info_.width - 2 * margin, avail_h = bottom - margin - top;
+  // A word must not break across lines: the setup address is one long word.
+  int longest = 0, word = 0;
+  for (char ch : m.body + " ") {
+    if (ch == ' ' || ch == '\n') word = 0;
+    else longest = std::max(longest, ++word);
+  }
+  struct Fit {
+    int module = 0, scale = 1;
+    bool beside = false;
+    std::vector<std::string> lines;
+  } fit;
+  // Under: the code above the text, which keeps the body's size.
+  if (longest <= layout_.body_cols) {
+    fit.lines = wrap_text(m.body, layout_.body_cols);
+    const int text_h = static_cast<int>(fit.lines.size()) * Canvas::line_height(s);
+    fit.module = std::max(0, std::min(avail_w, avail_h - text_h - margin)) / n;
+    fit.scale = s;
+  }
+  // Beside: the code at the left, the text at its right, smaller if it must be.
+  const int beside = std::min(avail_h, avail_w / 2) / n;
+  for (int ts = s; ts >= 1 && beside > fit.module; --ts) {
+    const int cols = cols_for(avail_w - beside * n - margin, ts);
+    if (cols < longest) continue;
+    auto lines = wrap_text(m.body, cols);
+    if (static_cast<int>(lines.size()) * Canvas::line_height(ts) > avail_h) continue;
+    fit = {beside, ts, true, std::move(lines)};
+  }
+  if (fit.module < 2) return false;
+
+  const int side = fit.module * n, lh = Canvas::line_height(fit.scale);
+  const int text_h = static_cast<int>(fit.lines.size()) * lh;
+  int qx, qy, tx, ty;
+  if (fit.beside) {
+    qx = margin;
+    qy = top + (avail_h - side) / 2;
+    tx = qx + side + margin;
+    ty = top + (avail_h - text_h) / 2;
+  } else {
+    qx = (info_.width - side) / 2;
+    qy = top + (avail_h - side - margin - text_h) / 2;
+    tx = margin;
+    ty = qy + side + margin;
+  }
+  c.fill_rect(qx, qy, side, side, rgb565(255, 255, 255));
+  for (int y = 0; y < qr_.size(); ++y) {
+    for (int x = 0; x < qr_.size(); ++x) {
+      if (qr_.dark(x, y))
+        c.fill_rect(qx + (x + quiet) * fit.module, qy + (y + quiet) * fit.module, fit.module, fit.module, 0);
+    }
+  }
+  for (const auto& line : fit.lines) {
+    c.text(tx, ty, line, fit.scale, kText);
+    ty += lh;
+  }
+  return true;
 }
 
 Ui::HeroGeom Ui::hero_geom(const UiModel& m) const {

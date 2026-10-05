@@ -15,6 +15,9 @@ are trademarks or brand assets of Nous Research. They are used here only to
 describe compatibility with Hermes Agent. This project's MIT license covers its
 own code and documentation; it grants no rights to those names or marks.
 
+QR Code is a registered trademark of DENSO WAVE INCORPORATED. The QR encoder in
+firmware/core/src/qr.cpp is written for this project from ISO/IEC 18004.
+
 Third-party material
 --------------------
 The MIT license above covers only the code and documentation written for this

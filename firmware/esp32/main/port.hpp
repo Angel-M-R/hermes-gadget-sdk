@@ -397,7 +397,8 @@ class Wifi {
   void disconnected();
   void connected(hg::App& app);
   void tick(hg::App& app, uint32_t now);
-  std::string start_setup();
+  // The temporary setup network's instructions and join code; empty text when it can't start.
+  hg::App::WifiSetup start_setup();
   void stop_setup();
   void provision(const hg::WifiCredentials& credentials);
 

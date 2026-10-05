@@ -1,4 +1,5 @@
 // Drives hg::App through a fake HAL the way a Hermes gateway would.
+#include <algorithm>
 #include <cmath>
 #include <deque>
 #include <map>
@@ -1492,11 +1493,15 @@ TEST("Wi-Fi setup: private instructions stay out of diagnostics and prompts clos
   Rig r(Rig::touch_profile());
   r.bring_online(true);
   int closed = 0;
-  r.app.on_wifi_setup = [] { return "Network: Hermes-test\nPassword: private-setup-key"; };
+  r.app.on_wifi_setup = [] {
+    return hg::App::WifiSetup{"Network: Hermes-test\nPassword: private-setup-key",
+                              hg::wifi_join_code("Hermes-test", "private-setup-key")};
+  };
   r.app.on_wifi_setup_close = [&] { ++closed; };
   CHECK(r.app.start_wifi_setup());
   CHECK(r.app.screen() == hg::Screen::Setup);
   CHECK(r.app.model().body.find("private-setup-key") != std::string::npos);
+  CHECK_EQ(r.app.model().qr, std::string("WIFI:T:WPA;S:Hermes-test;P:private-setup-key;;"));
   CHECK(r.app.console("diag").find("private-setup-key") == std::string::npos);
   CHECK(r.app.status_json().find("private-setup-key") == std::string::npos);
   r.app.console("talk"); r.app.console("release");
@@ -1508,6 +1513,7 @@ TEST("Wi-Fi setup: private instructions stay out of diagnostics and prompts clos
   touch.update(false, 0, 0, r.fake.clock + 40);
   CHECK_EQ(closed, 1);
   CHECK(!r.app.wifi_setup_open());
+  CHECK(r.app.model().qr.empty());
   CHECK(r.app.start_wifi_setup());
   r.server(R"({"type":"prompt","id":"setup-test","text":"Continue?"})");
   CHECK_EQ(closed, 2);
@@ -1516,11 +1522,73 @@ TEST("Wi-Fi setup: private instructions stay out of diagnostics and prompts clos
   CHECK(!r.app.start_wifi_setup());
 }
 
+TEST("Wi-Fi setup: every screen shape shows a join code that reads back module for module") {
+  struct Shape {
+    int width, height;
+    bool round;
+    int corner;
+    bool beside;  // the code at the left of the text rather than above it
+  };
+  const Shape shapes[] = {{320, 240, false, 0, true}, {240, 240, false, 0, false}, {466, 466, true, 0, false},
+                          {368, 448, false, 40, false}, {320, 170, false, 0, true}};
+  const std::string code = hg::wifi_join_code("Hermes-1A2B", "1a2b3c4d");
+  const hg::QrCode want = hg::QrCode::encode(code);
+  for (const Shape& shape : shapes) {
+    Rig r;
+    if (shape.round) {
+      r.fake.make_round(shape.width);
+    } else {
+      r.fake.width = shape.width;
+      r.fake.height = shape.height;
+      r.fake.fb.assign(static_cast<size_t>(shape.width * shape.height), 0);
+    }
+    r.fake.corner_radius = shape.corner;
+    r.bring_online(true);
+    r.app.on_wifi_setup = [&code] {
+      return hg::App::WifiSetup{
+          "Network: Hermes-1A2B\nPassword: 1a2b3c4d\nOpen http://192.168.4.1\nAvailable for 10 minutes.", code};
+    };
+    CHECK(r.app.start_wifi_setup());
+    // The code is the only pure white on screen, quiet zone included.
+    int x0 = shape.width, y0 = shape.height, x1 = -1, y1 = -1;
+    for (int y = 0; y < shape.height; ++y)
+      for (int x = 0; x < shape.width; ++x)
+        if (r.fake.fb[static_cast<size_t>(y * shape.width + x)] == 0xFFFF) {
+          x0 = std::min(x0, x);
+          y0 = std::min(y0, y);
+          x1 = std::max(x1, x);
+          y1 = std::max(y1, y);
+        }
+    const int side = x1 - x0 + 1, n = want.size() + 4;
+    CHECK(x1 >= 0 && side == y1 - y0 + 1 && side % n == 0);
+    const int px = side / n;
+    CHECK(px >= 2);
+    CHECK_EQ((x0 + x1) / 2 < shape.width / 2 - 2, shape.beside);  // a code above the text is centred
+    bool same = x1 >= 0;
+    for (int y = 0; same && y < want.size(); ++y)
+      for (int x = 0; x < want.size(); ++x) {
+        const uint16_t c = r.fake.fb[static_cast<size_t>((y0 + (y + 2) * px + px / 2) * shape.width + x0 + (x + 2) * px + px / 2)];
+        if ((c == 0) != want.dark(x, y)) same = false;
+      }
+    CHECK(same);
+  }
+
+  // Too little room for a readable code: the instructions alone, as before.
+  Rig tiny;
+  tiny.fake.width = 240;
+  tiny.fake.height = 100;
+  tiny.fake.fb.assign(240 * 100, 0);
+  tiny.bring_online(true);
+  tiny.app.on_wifi_setup = [&code] { return hg::App::WifiSetup{"Network: Hermes-1A2B\nPassword: 1a2b3c4d", code}; };
+  CHECK(tiny.app.start_wifi_setup());
+  CHECK(std::none_of(tiny.fake.fb.begin(), tiny.fake.fb.end(), [](uint16_t c) { return c == 0xFFFF; }));
+}
+
 TEST("Wi-Fi setup: opening from USB releases an active talk button") {
   Rig r;
   r.bring_online(true);
   r.app.console("set screen_timeout 30");
-  r.app.on_wifi_setup = [] { return "Temporary setup network"; };
+  r.app.on_wifi_setup = [] { return hg::App::WifiSetup{"Temporary setup network", ""}; };
   r.app.on_button(hg::Button::Talk, true);
   CHECK(r.fake.mic_on);
   CHECK(r.app.start_wifi_setup());

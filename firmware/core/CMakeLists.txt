@@ -26,6 +26,7 @@ set(HG_CORE_SOURCES
     src/json.cpp
     ${HG_FACE_SOURCE}
     src/protocol.cpp
+    src/qr.cpp
     src/setup.cpp
     src/touch.cpp
     src/ui.cpp

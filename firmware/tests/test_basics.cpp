@@ -6,6 +6,8 @@
 #include "hg/crypto.hpp"
 #include "hg/json.hpp"
 #include "hg/protocol.hpp"
+#include "hg/qr.hpp"
+#include "hg/setup.hpp"
 #include "hg/vad.hpp"
 
 using hg::json::Value;
@@ -179,4 +181,113 @@ TEST("vad: silence alone gives up") {
   hg::Vad::Result r = hg::Vad::Result::Continue;
   for (int i = 0; i < 100 && r == hg::Vad::Result::Continue; ++i) r = vad.feed(quiet.data(), quiet.size());
   CHECK(r == hg::Vad::Result::NoSpeech);
+}
+
+namespace {
+
+// Reference symbols from an independent encoder (python-qrcode 8, level M).
+const char* const kWifiV3[] = {
+    "#######....####....#..#######",
+    "#.....#..#.###.####.#.#.....#",
+    "#.###.#.##....#...#...#.###.#",
+    "#.###.#.#.###...#.....#.###.#",
+    "#.###.#.##.#.#....#.#.#.###.#",
+    "#.....#.########.##.#.#.....#",
+    "#######.#.#.#.#.#.#.#.#######",
+    "........###..#.##.#..........",
+    "#.#####..#....##.##.#.#####..",
+    "#.##...###.#....##.#..#.#.##.",
+    "#.#.#.#........#.##.####.#...",
+    "...#...#..#...###...###.#..##",
+    "##.######..##..##..#...####..",
+    "###.#......####....#.#.##.##.",
+    "#..####....######.#.####..#..",
+    "##.#.#.#.#.###....##.#...#...",
+    ".###..#.##..#.##.##.#..#.#.##",
+    "#.#....######...##.####.##.#.",
+    "#..#.##.#.#.#..####.#..##....",
+    "#.##....##..#.#...#.#...#...#",
+    "#...####...##..####.#######..",
+    "........#..####.....#...#.#..",
+    "#######...#..###..###.#.#.#..",
+    "#.....#.##.###.....##...##...",
+    "#.###.#.##.##.##.#..######...",
+    "#.###.#.#.#.##..#.##....##.##",
+    "#.###.#.#..#...#..###.######.",
+    "#.....#....####.....##..##.#.",
+    "#######.#.##.#######.##.##...",
+};
+const char* const kBytesV4Mask5[] = {
+    "#######..###..............#######",
+    "#.....#.#######...#.....#.#.....#",
+    "#.###.#.#.##.#.#..#..#..#.#.###.#",
+    "#.###.#.##.....###.#.#.#..#.###.#",
+    "#.###.#....###.#.#.##.##..#.###.#",
+    "#.....#..###......#.....#.#.....#",
+    "#######.#.#.#.#.#.#.#.#.#.#######",
+    "........#.........#.....#........",
+    "#.....#.#..#.##.##.##.##.##..###.",
+    "..#.##.##......#.#.#.#.#.#.##..#.",
+    "#..#####...##..#..#..#..#.##..##.",
+    "#...##.###....#...#.....#...###..",
+    "#..#.##.....###...........#....#.",
+    ".##....#..#.#.####.#####.###...##",
+    "###..##..#.#.#.#..#..#..#.##..##.",
+    "##..##..##.##.#.#.#.#.#.#.#..##.#",
+    "#.##.##...#..##.##.##.##.#..##..#",
+    "#.##.#..###.######.#####.###...##",
+    "#....##.####...###########.####.#",
+    "###.#..#.#.####...#.....#...###..",
+    "#.#...###....#..##.##.##.#..##..#",
+    "###.......#.#.##.#.#.#.#.#.##..#.",
+    "#.#####.#.#....#..#..#..#.##..##.",
+    "#.####.########...#.....#...###..",
+    "##.####..#.##...........#####....",
+    "........#..##..###.######...#..##",
+    "#######..###...#..#..#.##.#.#.##.",
+    "#.....#..##...#.#.#.#.###...###.#",
+    "#.###.#....##...##.##.#.######..#",
+    "#.###.#..##.######.####.##.##..##",
+    "#.###.#..####..#########....#####",
+    "#.....#..#.#.##...#....#..#..##..",
+    "#######.#.#.#.#.##.##.###..###.#.",
+};
+
+template <size_t N>
+bool same_modules(const hg::QrCode& qr, const char* const (&rows)[N]) {
+  if (qr.size() != static_cast<int>(N)) return false;
+  for (int y = 0; y < qr.size(); ++y)
+    for (int x = 0; x < qr.size(); ++x)
+      if (qr.dark(x, y) != (rows[y][x] == '#')) return false;
+  return true;
+}
+
+}  // namespace
+
+TEST("qr: symbols match an independent encoder, interleaved blocks included") {
+  hg::QrCode wifi = hg::QrCode::encode("WIFI:T:WPA;S:Hermes-1A2B;P:1a2b3c4d;;");
+  CHECK_EQ(wifi.version(), 3);
+  CHECK_EQ(wifi.mask(), 2);  // the lowest penalty score
+  CHECK(same_modules(wifi, kWifiV3));
+  hg::QrCode two_blocks = hg::QrCode::encode(std::string(60, 'x'), 5);
+  CHECK_EQ(two_blocks.version(), 4);
+  CHECK_EQ(two_blocks.mask(), 5);
+  CHECK(same_modules(two_blocks, kBytesV4Mask5));
+}
+
+TEST("qr: the smallest version that holds the text, up to version 6") {
+  CHECK_EQ(hg::QrCode::encode(std::string(14, 'a')).version(), 1);
+  CHECK_EQ(hg::QrCode::encode(std::string(15, 'a')).version(), 2);
+  CHECK_EQ(hg::QrCode::encode(std::string(42, 'a')).version(), 3);
+  CHECK_EQ(hg::QrCode::encode(std::string(43, 'a')).size(), 33);
+  CHECK_EQ(hg::QrCode::encode(std::string(106, 'a')).version(), 6);
+  CHECK_EQ(hg::QrCode::encode(std::string(107, 'a')).size(), 0);
+  CHECK_EQ(hg::QrCode::encode("text", 8).size(), 0);
+}
+
+TEST("setup: a Wi-Fi join code escapes the scheme's special characters") {
+  CHECK_EQ(hg::wifi_join_code("Hermes-1A2B", "1a2b3c4d"), std::string("WIFI:T:WPA;S:Hermes-1A2B;P:1a2b3c4d;;"));
+  CHECK_EQ(hg::wifi_join_code("My;Net, \"5G\"", "a:b\\c"),
+           std::string("WIFI:T:WPA;S:My\\;Net\\, \\\"5G\\\";P:a\\:b\\\\c;;"));
+  CHECK_EQ(hg::wifi_join_code("Cafe", ""), std::string("WIFI:T:nopass;S:Cafe;;"));
 }
