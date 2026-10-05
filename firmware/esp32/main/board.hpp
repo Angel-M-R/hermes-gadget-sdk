@@ -54,7 +54,10 @@ struct AmoledConfig {
   int gap_x = 0, gap_y = 0;  // the controller's RAM is wider than the glass
   int qspi_mhz = 40;
   bool round = false;
-  int corner_radius = 0;  // rounded glass corners (hg::DisplayInfo::corner_radius)
+  uint8_t corner_radius = 0;  // rounded glass corners (hg::DisplayInfo::corner_radius)
+  // While the screen is dark the panel sleeps, and main.cpp rests the touch
+  // controller and the processor's full speed with it.
+  bool sleep_when_dark = false;
 };
 
 struct I2cBusConfig {
@@ -156,6 +159,7 @@ struct BoardConfig {
   int status_led = -1;
   const char* talk_label = "TALK";
   const char* cancel_label = "CANCEL";
+  uint16_t talk_release_grace_ms = 0;  // hg::DeviceProfile::talk_release_grace_ms
 };
 
 // GPIO held high to power the panel's peripheral rail. Boards without one

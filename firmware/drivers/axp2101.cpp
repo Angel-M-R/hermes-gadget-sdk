@@ -46,8 +46,8 @@ bool Axp2101::enable_power_key() {
 bool Axp2101::take_short_press() {
   uint8_t status = 0;
   if (!read_(kIrqStatus2, &status, 1) || !(status & kPowerKeyShort)) return false;
-  write_(kIrqStatus2, kPowerKeyShort);
-  return true;
+  // Still latched, the press would be reported again at the next poll: count it once cleared.
+  return write_(kIrqStatus2, kPowerKeyShort);
 }
 
 bool Axp2101::enable_aldo1_3v3() {

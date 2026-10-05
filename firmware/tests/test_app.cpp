@@ -1,4 +1,5 @@
 // Drives hg::App through a fake HAL the way a Hermes gateway would.
+#include <algorithm>
 #include <cmath>
 #include <deque>
 #include <map>
@@ -82,6 +83,14 @@ struct FakeHal : hg::Display, hg::AudioIn, hg::AudioOut, hg::Transport, hg::Stor
   }
   uint16_t* framebuffer() override { return fb.data(); }
   void set_backlight(uint8_t percent) override { brightness = percent; }
+  bool asleep = false;
+  int sleep_changes = 0;
+  int brightness_at_sleep_change = -1;  // the backlight when the panel last slept or woke
+  void set_sleep(bool a) override {
+    asleep = a;
+    ++sleep_changes;
+    brightness_at_sleep_change = brightness;
+  }
   void flush(uint16_t y0, uint16_t y1) override {
     ++flushes;
     flushed_rows += y1 - y0;
@@ -117,6 +126,12 @@ struct FakeHal : hg::Display, hg::AudioIn, hg::AudioOut, hg::Transport, hg::Stor
     for (auto it = sent.rbegin(); it != sent.rend(); ++it)
       if ((*it)["type"].as_string() == type) return &*it;
     return nullptr;
+  }
+
+  int count(const std::string& type) const {
+    int n = 0;
+    for (const auto& m : sent) n += m["type"].as_string() == type;
+    return n;
   }
 };
 
@@ -317,6 +332,68 @@ TEST("app: a short tap is discarded instead of sent") {
   CHECK(r.fake.last("audio.cancel") != nullptr);
   CHECK(r.fake.last("audio.end") == nullptr);
   CHECK(r.app.screen() == hg::Screen::Ready);
+}
+
+TEST("app: a held recording runs for up to a minute") {
+  Rig r;
+  r.bring_online(true);
+  r.app.on_button(hg::Button::Talk, true);
+  for (int i = 0; i < 5; ++i) {
+    r.advance(10000);
+    r.server(R"({"type":"ping"})");
+  }
+  CHECK(r.fake.mic_on);
+  CHECK(r.fake.last("audio.end") == nullptr);
+  r.advance(10100);
+  CHECK(!r.fake.mic_on);
+  const Value* end = r.fake.last("audio.end");
+  CHECK(end != nullptr);
+  if (end) CHECK((*end)["duration_ms"].as_int() > 60000);
+  CHECK(r.app.screen() == hg::Screen::Thinking);
+}
+
+TEST("app: a TALK key that slips mid-recording keeps one recording") {
+  hg::DeviceProfile p = Rig::profile("ws://hermes.local:8765/gadget");
+  p.talk_release_grace_ms = 400;
+  Rig r(p);
+  r.bring_online(true);
+  r.app.on_button(hg::Button::Talk, true);
+  r.advance(1000);
+  r.app.on_button(hg::Button::Talk, false);
+  r.advance(200);
+  CHECK(r.fake.mic_on);  // still recording through the slip
+  r.app.on_button(hg::Button::Talk, true);
+  r.advance(1000);
+  CHECK(r.app.screen() == hg::Screen::Listening);
+  r.app.on_button(hg::Button::Talk, false);
+  r.advance(300);
+  CHECK(r.fake.last("audio.end") == nullptr);
+  r.advance(200);
+  CHECK(!r.fake.mic_on);
+  CHECK_EQ(r.fake.count("audio.start"), 1);
+  CHECK_EQ(r.fake.count("audio.end"), 1);
+  CHECK(r.app.screen() == hg::Screen::Thinking);
+
+  // A tap is still discarded, measured to the release rather than the end of the grace.
+  r.app.on_button(hg::Button::Talk, true);
+  r.advance(100);
+  r.app.on_button(hg::Button::Talk, false);
+  r.advance(500);
+  CHECK_EQ(r.fake.count("audio.cancel"), 1);
+  CHECK_EQ(r.fake.count("audio.end"), 1);
+  CHECK_EQ(r.app.model().hint, std::string("Hold TALK while speaking"));
+
+  // CANCEL while TALK is up throws the recording away; the grace sends nothing.
+  r.app.on_button(hg::Button::Talk, true);
+  r.advance(1000);
+  r.app.on_button(hg::Button::Talk, false);
+  r.advance(100);
+  r.app.on_button(hg::Button::Cancel, true);
+  CHECK(!r.fake.mic_on);
+  r.advance(1000);
+  r.app.on_button(hg::Button::Cancel, false);
+  CHECK_EQ(r.fake.count("audio.cancel"), 2);
+  CHECK_EQ(r.fake.count("audio.end"), 1);
 }
 
 TEST("app: reply audio plays through the speaker and barge-in stops it") {
@@ -1132,6 +1209,73 @@ TEST("touch: a long reply carries the speaker button in its header") {
   CHECK(!r.app.model().hero);
   CHECK(!r.app.speaker_button_hit(32, 54));  // the indicator lives there now
   CHECK(r.app.speaker_button_hit(300, 42));
+  CHECK(r.app.speaker_button_hit(300, 55));
+  CHECK(!r.app.speaker_button_hit(300, 60));  // the reply's first line, under the header
+}
+
+TEST("touch: the speaker button stays pressed through a hold, and a swipe from it still cancels") {
+  Rig r(Rig::touch_profile());
+  r.bring_online(true);
+  hg::TouchGestures touch(r.app);
+  touch.update(true, 32, 54, r.fake.clock);
+  r.advance(460);
+  touch.tick(r.fake.clock);
+  CHECK(r.app.muted());
+  CHECK(r.app.model().speaker_pressed);  // the finger is still on it
+  touch.update(false, 0, 0, r.fake.clock);
+  CHECK(!r.app.model().speaker_pressed);
+
+  // The app's clock passes 0.4 s while the lift is still on its way: still a tap.
+  touch.update(true, 32, 54, r.fake.clock);
+  r.advance(410);
+  touch.tick(r.fake.clock);
+  touch.update(false, 0, 0, r.fake.clock);
+  CHECK(r.app.muted());
+  CHECK_EQ(r.app.model().hint, std::string("Hold the speaker to unmute"));
+
+  // Swiping down from the button is the cancel swipe, as anywhere else.
+  r.app.submit_text("What's the weather?");
+  CHECK(r.app.screen() == hg::Screen::Thinking);
+  touch.update(true, 32, 54, r.fake.clock);
+  touch.update(true, 34, 100, r.fake.clock);
+  touch.update(true, 35, 130, r.fake.clock);
+  touch.update(false, 0, 0, r.fake.clock);
+  CHECK(r.fake.last("cancel") != nullptr);
+  CHECK(r.app.muted());
+  CHECK(!r.app.model().speaker_pressed);
+}
+
+TEST("touch: a round screen keeps its speaker button inside the glass") {
+  Rig r(Rig::touch_profile());
+  r.fake.make_round(466);
+  r.bring_online(true);
+  CHECK(r.app.model().speaker_button);
+  CHECK(r.app.speaker_button_hit(112, 134));  // the mascot screen's button, top left of the square
+  const uint16_t bg = r.fake.fb[static_cast<size_t>(233 * 466)];
+  CHECK(r.fake.fb[static_cast<size_t>(134 * 466 + 112)] != bg);  // and it was drawn there
+  int stray = 0;
+  for (int y = 0; y < 466; ++y)
+    for (int x = 0; x < 466; ++x) {
+      const int dx = 2 * x + 1 - 466, dy = 2 * y + 1 - 466;
+      if (dx * dx + dy * dy > 466 * 466) stray += r.fake.fb[static_cast<size_t>(y * 466 + x)] != bg;
+    }
+  CHECK_EQ(stray, 0);
+}
+
+TEST("settings: a speaker check that ends by itself keeps a muted speaker muted") {
+  Rig r;
+  r.bring_online(true);
+  CHECK_EQ(r.app.console("set mute 1"), std::string("@ok mute"));
+  CHECK_EQ(r.fake.volume, 0);
+  CHECK(r.app.open_settings());
+  for (int i = 0; i < 4; ++i) r.app.console("cancel");
+  CHECK_EQ(r.app.model().detail, std::string("Speaker check"));
+  r.app.console("talk");
+  r.app.console("release");
+  CHECK_EQ(r.fake.volume, 70);  // the tone is heard even while muted
+  r.advance(20);
+  CHECK(r.app.model().body.find("Tone finished") != std::string::npos);
+  CHECK_EQ(r.fake.volume, 0);
 }
 
 TEST("power key: turns the screen off and on; replies keep it off, a question wakes it") {
@@ -1283,6 +1427,55 @@ TEST("power: idle screen dims, sleeps and consumes the wake input without record
   CHECK_EQ(r.fake.brightness, 100);
 }
 
+TEST("power: a dark screen sleeps the panel, which wakes before its backlight returns") {
+  Rig r;
+  r.fake.backlight = true;
+  r.bring_online(true);
+  r.app.on_power_key();
+  CHECK(r.fake.asleep);
+  CHECK_EQ(r.fake.brightness_at_sleep_change, 0);
+  r.server(R"({"type":"turn.start","turn":"a1"})");
+  r.server(R"({"type":"reply","turn":"a1","text":"Said with the screen off."})");
+  r.server(R"({"type":"turn.end","turn":"a1","outcome":"success"})");
+  r.advance(1000);
+  CHECK(r.fake.asleep);
+  CHECK_EQ(r.fake.sleep_changes, 1);
+  r.app.on_power_key();
+  CHECK(!r.fake.asleep);
+  CHECK_EQ(r.fake.brightness_at_sleep_change, 0);
+  CHECK_EQ(r.fake.brightness, 100);
+
+  // The idle timer: dimming leaves the panel awake, going dark puts it to sleep.
+  r.app.console("set screen_timeout 30");
+  r.advance(15000);
+  CHECK_EQ(r.fake.brightness, 10);
+  CHECK(!r.fake.asleep);
+  r.server(R"({"type":"ping"})");
+  r.advance(15000);
+  CHECK(r.fake.asleep);
+  CHECK_EQ(r.fake.sleep_changes, 3);
+  r.app.on_button(hg::Button::Talk, true);
+  CHECK(!r.fake.asleep);
+  CHECK_EQ(r.fake.brightness, 100);
+  r.app.on_button(hg::Button::Talk, false);
+
+  // A setting changed over USB lights it again.
+  r.app.on_power_key();
+  CHECK(r.fake.asleep);
+  r.app.console("set brightness 60");
+  CHECK(!r.fake.asleep);
+  CHECK_EQ(r.fake.brightness_at_sleep_change, 0);
+  CHECK_EQ(r.fake.brightness, 60);
+  CHECK_EQ(r.fake.sleep_changes, 6);
+
+  // A question stays on screen through the power key.
+  r.server(R"({"type":"prompt","id":"q1","text":"Continue?"})");
+  r.app.on_power_key();
+  CHECK(!r.fake.asleep);
+  CHECK_EQ(r.fake.brightness, 60);
+  CHECK_EQ(r.fake.sleep_changes, 6);
+}
+
 TEST("power: failed readings replace stale data and shutdown requires a second local selection") {
   struct Battery : hg::Power {
     bool failed = false;
@@ -1374,11 +1567,15 @@ TEST("Wi-Fi setup: private instructions stay out of diagnostics and prompts clos
   Rig r(Rig::touch_profile());
   r.bring_online(true);
   int closed = 0;
-  r.app.on_wifi_setup = [] { return "Network: Hermes-test\nPassword: private-setup-key"; };
+  r.app.on_wifi_setup = [] {
+    return hg::App::WifiSetup{"Network: Hermes-test\nPassword: private-setup-key",
+                              hg::wifi_join_code("Hermes-test", "private-setup-key")};
+  };
   r.app.on_wifi_setup_close = [&] { ++closed; };
   CHECK(r.app.start_wifi_setup());
   CHECK(r.app.screen() == hg::Screen::Setup);
   CHECK(r.app.model().body.find("private-setup-key") != std::string::npos);
+  CHECK_EQ(r.app.model().qr, std::string("WIFI:T:WPA;S:Hermes-test;P:private-setup-key;;"));
   CHECK(r.app.console("diag").find("private-setup-key") == std::string::npos);
   CHECK(r.app.status_json().find("private-setup-key") == std::string::npos);
   r.app.console("talk"); r.app.console("release");
@@ -1390,6 +1587,7 @@ TEST("Wi-Fi setup: private instructions stay out of diagnostics and prompts clos
   touch.update(false, 0, 0, r.fake.clock + 40);
   CHECK_EQ(closed, 1);
   CHECK(!r.app.wifi_setup_open());
+  CHECK(r.app.model().qr.empty());
   CHECK(r.app.start_wifi_setup());
   r.server(R"({"type":"prompt","id":"setup-test","text":"Continue?"})");
   CHECK_EQ(closed, 2);
@@ -1398,11 +1596,73 @@ TEST("Wi-Fi setup: private instructions stay out of diagnostics and prompts clos
   CHECK(!r.app.start_wifi_setup());
 }
 
+TEST("Wi-Fi setup: every screen shape shows a join code that reads back module for module") {
+  struct Shape {
+    int width, height;
+    bool round;
+    int corner;
+    bool beside;  // the code at the left of the text rather than above it
+  };
+  const Shape shapes[] = {{320, 240, false, 0, true}, {240, 240, false, 0, false}, {466, 466, true, 0, false},
+                          {368, 448, false, 40, false}, {320, 170, false, 0, true}};
+  const std::string code = hg::wifi_join_code("Hermes-1A2B", "1a2b3c4d");
+  const hg::QrCode want = hg::QrCode::encode(code);
+  for (const Shape& shape : shapes) {
+    Rig r;
+    if (shape.round) {
+      r.fake.make_round(shape.width);
+    } else {
+      r.fake.width = shape.width;
+      r.fake.height = shape.height;
+      r.fake.fb.assign(static_cast<size_t>(shape.width * shape.height), 0);
+    }
+    r.fake.corner_radius = shape.corner;
+    r.bring_online(true);
+    r.app.on_wifi_setup = [&code] {
+      return hg::App::WifiSetup{
+          "Network: Hermes-1A2B\nPassword: 1a2b3c4d\nOpen http://192.168.4.1\nAvailable for 10 minutes.", code};
+    };
+    CHECK(r.app.start_wifi_setup());
+    // The code is the only pure white on screen, quiet zone included.
+    int x0 = shape.width, y0 = shape.height, x1 = -1, y1 = -1;
+    for (int y = 0; y < shape.height; ++y)
+      for (int x = 0; x < shape.width; ++x)
+        if (r.fake.fb[static_cast<size_t>(y * shape.width + x)] == 0xFFFF) {
+          x0 = std::min(x0, x);
+          y0 = std::min(y0, y);
+          x1 = std::max(x1, x);
+          y1 = std::max(y1, y);
+        }
+    const int side = x1 - x0 + 1, n = want.size() + 4;
+    CHECK(x1 >= 0 && side == y1 - y0 + 1 && side % n == 0);
+    const int px = side / n;
+    CHECK(px >= 2);
+    CHECK_EQ((x0 + x1) / 2 < shape.width / 2 - 2, shape.beside);  // a code above the text is centred
+    bool same = x1 >= 0;
+    for (int y = 0; same && y < want.size(); ++y)
+      for (int x = 0; x < want.size(); ++x) {
+        const uint16_t c = r.fake.fb[static_cast<size_t>((y0 + (y + 2) * px + px / 2) * shape.width + x0 + (x + 2) * px + px / 2)];
+        if ((c == 0) != want.dark(x, y)) same = false;
+      }
+    CHECK(same);
+  }
+
+  // Too little room for a readable code: the instructions alone, as before.
+  Rig tiny;
+  tiny.fake.width = 240;
+  tiny.fake.height = 100;
+  tiny.fake.fb.assign(240 * 100, 0);
+  tiny.bring_online(true);
+  tiny.app.on_wifi_setup = [&code] { return hg::App::WifiSetup{"Network: Hermes-1A2B\nPassword: 1a2b3c4d", code}; };
+  CHECK(tiny.app.start_wifi_setup());
+  CHECK(std::none_of(tiny.fake.fb.begin(), tiny.fake.fb.end(), [](uint16_t c) { return c == 0xFFFF; }));
+}
+
 TEST("Wi-Fi setup: opening from USB releases an active talk button") {
   Rig r;
   r.bring_online(true);
   r.app.console("set screen_timeout 30");
-  r.app.on_wifi_setup = [] { return "Temporary setup network"; };
+  r.app.on_wifi_setup = [] { return hg::App::WifiSetup{"Temporary setup network", ""}; };
   r.app.on_button(hg::Button::Talk, true);
   CHECK(r.fake.mic_on);
   CHECK(r.app.start_wifi_setup());

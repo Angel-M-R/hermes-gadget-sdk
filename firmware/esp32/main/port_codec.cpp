@@ -82,6 +82,9 @@ bool CodecAudio::begin(const CodecAudioConfig& cfg, i2c_master_bus_handle_t bus)
   dac.ctrl_if = audio_codec_new_i2c_ctrl(&dac_i2c);
   dac.gpio_if = gpio_if;
   const bool es8311_mic = cfg.mic == MicCodec::Es8311;
+  // That microphone records through the speaker's ES8311; an AW88298 speaker has no ADC.
+  const bool mic_supported = !es8311_mic || cfg.speaker == SpeakerCodec::Es8311;
+  if (!mic_supported) ESP_LOGE(TAG, "an ES8311 microphone needs the ES8311 speaker codec; microphone disabled");
   dac.codec_mode = es8311_mic ? ESP_CODEC_DEV_WORK_MODE_BOTH : ESP_CODEC_DEV_WORK_MODE_DAC;
   dac.pa_pin = static_cast<int16_t>(cfg.pa);
   dac.pa_reverted = false;
@@ -106,7 +109,9 @@ bool CodecAudio::begin(const CodecAudioConfig& cfg, i2c_master_bus_handle_t bus)
   esp_codec_dev_cfg_t in_cfg = {};
   in_cfg.dev_type = ESP_CODEC_DEV_TYPE_IN;
   in_cfg.data_if = data_if;
-  if (es8311_mic) {
+  if (!mic_supported) {
+    in_cfg.codec_if = nullptr;
+  } else if (es8311_mic) {
     in_cfg.codec_if = out_cfg.codec_if;  // the same ES8311 records too
   } else {
     audio_codec_i2c_cfg_t adc_i2c = {};

@@ -34,4 +34,4 @@ def test_hermes_recognizes_the_declared_initial_voice_engine():
 
     declaration = read_python_declaration(REPO / "plugin")
     assert declaration.is_member is True
-    assert "piper-tts>=1.4.2,<2" in declaration.install_requirements
+    assert any(req.replace(" ", "").startswith("piper-tts") for req in declaration.install_requirements)

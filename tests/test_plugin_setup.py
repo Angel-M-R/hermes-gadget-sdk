@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 import types
 from urllib.parse import unquote
 
@@ -34,6 +35,32 @@ def _setup(monkeypatch, answer: str, extra: dict, *, writable: bool = True, fail
     monkeypatch.setattr(cli, "_lan_address", lambda: "192.168.1.20")
     setup.interactive_setup()
     return writes, shown
+
+
+def _fake_hermes_config(monkeypatch, *, managed: bool = False, exits: bool = False):
+    written = []
+
+    def set_config_value(key, value):
+        if exits:
+            raise SystemExit(1)  # Hermes's writer exits on a key or value it refuses
+        written.append((key, value))
+
+    config = types.SimpleNamespace(set_config_value=set_config_value, is_managed=lambda: managed)
+    monkeypatch.setitem(sys.modules, "hermes_cli", types.SimpleNamespace(config=config))
+    monkeypatch.setitem(sys.modules, "hermes_cli.config", config)
+    return written
+
+
+def test_a_config_write_reports_only_what_hermes_wrote(monkeypatch):
+    written = _fake_hermes_config(monkeypatch)
+    assert setup._set_config("tts.provider", "edge") is True
+    assert written == [("tts.provider", "edge")]
+    # A package-managed Hermes only prints an error, so nothing may be claimed or written.
+    written = _fake_hermes_config(monkeypatch, managed=True)
+    assert setup._set_config("tts.provider", "edge") is False
+    assert written == []
+    _fake_hermes_config(monkeypatch, exits=True)
+    assert setup._set_config("tts.provider", "edge") is False
 
 
 def test_setup_enables_the_platform_and_points_at_the_installer(monkeypatch):

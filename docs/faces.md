@@ -138,8 +138,8 @@ A logo or an object, with nothing to blink, can be generated as a still picture 
 - **A face looking right**, where the space for the waves is in front of it: `--talk-waves
   right`, with `--mouth-*` and `--ear-cup` near the front edge of the drawing.
 - **A large screen**: the UI draws the largest size that fits, so a 368x448 panel has room
-  for more than 192 px. `--sizes 64 96 144 192 288` adds one; each 288 px frame costs about
-  10 KB of flash.
+  for more than 192 px. `--sizes 64 96 144 192 288` adds one. Each size has three frames (idle,
+  blink and talk), so 288 px costs about 31 KB of flash.
 - **No eyes at all**, like a closed helmet: anything that reads as an eye can blink. A visor
   slit given as `--eye-left` and `--eye-right`, one box per half, closes to a thin line with
   the default `--blink light`.
@@ -194,10 +194,13 @@ and the blink is a flicker nobody notices.
 Generate into `firmware/core/faces/<name>.cpp` instead of over the mascot, and choose it at
 build time: `CONFIG_HG_FACE="<name>"` in a board's `sdkconfig.defaults` (or `idf.py
 menuconfig` → **Hermes Gadget** → **Face**), and `cmake -DHG_FACE=<name>` for the simulator's
-library. PlatformIO keeps `firmware/esp32/sdkconfig.<env>` between builds, so delete it after
-changing the face in `sdkconfig.defaults`, or the old face is built again. Every other build keeps the shipped mascot, and `mascot_data.cpp` stays as it ships,
-so updates to the project merge cleanly. The AMOLED-1.8 profile in this fork builds
-`knight_dragon`, made from `assets/faces/knight-dragon.webp` with:
+library. Every other build keeps the shipped mascot, and `mascot_data.cpp` stays as it ships,
+so updates to the project merge cleanly. PlatformIO keeps `firmware/esp32/sdkconfig.<env>`
+between builds: delete it after changing the face in `sdkconfig.defaults`, or the old face is
+built again. Firmware builds take the face from `CONFIG_HG_FACE` alone. The simulator's build
+directory remembers `-DHG_FACE` until you change it: configure it with `-DHG_FACE=` to go back
+to the mascot. The AMOLED-1.8 profile in this fork builds `knight_dragon`, made from
+`assets/faces/knight-dragon.webp` with:
 
 ```
 hermes-gadget face assets/faces/knight-dragon.webp --mask bright \

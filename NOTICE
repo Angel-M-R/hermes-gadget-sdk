@@ -15,6 +15,9 @@ are trademarks or brand assets of Nous Research. They are used here only to
 describe compatibility with Hermes Agent. This project's MIT license covers its
 own code and documentation; it grants no rights to those names or marks.
 
+QR Code is a registered trademark of DENSO WAVE INCORPORATED. The QR encoder in
+firmware/core/src/qr.cpp is written for this project from ISO/IEC 18004.
+
 Third-party material
 --------------------
 The MIT license above covers only the code and documentation written for this
@@ -64,6 +67,14 @@ order in firmware/esp32/main/port_expander.cpp and the board's pin map follow
 Waveshare's board support package for the ESP32-S3-Touch-AMOLED-1.8,
 https://components.espressif.com/components/waveshare/esp32_s3_touch_amoled_1_8,
 and its V2 examples, released by Waveshare under the Apache License 2.0.
+
+The CST820's deep-sleep command in firmware/esp32/main/port_touch.cpp, the
+panel's sleep timing in firmware/esp32/main/port_amoled.cpp and the 400 ms
+grace for the AMOLED-1.8's BOOT key (firmware/esp32/main/board.cpp) follow the
+esp32-muse-agent patch for the same board,
+https://github.com/JJenglert1/esp32-muse-agent/tree/9bd511fb510b9336699cdf44cf219a66f4c59d1d,
+released under the Apache License 2.0. Only those values and the observation
+that BOOT slips are used; no code is copied.
 
 The BOX-3 panel initialization register values in
 firmware/esp32/main/panel_box3.hpp follow Espressif's ESP32-S3-BOX-3 BSP,

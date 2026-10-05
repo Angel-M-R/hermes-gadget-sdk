@@ -35,12 +35,21 @@ def _ui():
 
 
 def _set_config(key: str, value: str) -> bool:
-    """``hermes config set``: Hermes's own config writer, so comments and other settings survive."""
+    """``hermes config set``: Hermes's own config writer, so comments and other settings survive.
+
+    False when nothing was written: no Hermes to import, a package-managed install (whose writer
+    only prints an error), or a key or value the writer refuses (it exits)."""
     try:
-        from hermes_cli.config import set_config_value
+        from hermes_cli import config
     except ImportError:
         return False
-    set_config_value(key, value)
+    is_managed = getattr(config, "is_managed", None)
+    if is_managed is not None and is_managed():
+        return False
+    try:
+        config.set_config_value(key, value)
+    except SystemExit:
+        return False
     return True
 
 
@@ -68,7 +77,7 @@ def interactive_setup() -> None:
     else:
         print_warning("Couldn't update config.yaml from here. Run: hermes config set platforms.gadget.enabled true")
 
-    # Persist the voice first: a failed write must not activate a provider with the wrong voice.
+    # The voice first: all() stops at a failed write, so the provider never switches without it.
     voice_settings = [(f"tts.{DEFAULT_TTS_PROVIDER}.voice", DEFAULT_TTS_VOICE),
                       ("tts.provider", DEFAULT_TTS_PROVIDER)]
     if all(_set_config(key, value) for key, value in voice_settings):

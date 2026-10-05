@@ -154,7 +154,7 @@ hg::DisplayInfo AmoledDisplay::info() const {
   di.swap_bytes = true;  // big-endian RGB565 on the wire
   di.has_backlight = true;  // brightness command 0x51
   di.round = cfg_.round;
-  di.corner_radius = static_cast<uint8_t>(cfg_.corner_radius);
+  di.corner_radius = cfg_.corner_radius;
   di.emissive = true;  // AMOLED: black pixels are off
   return di;
 }
@@ -184,6 +184,15 @@ void AmoledDisplay::flush(uint16_t y0, uint16_t y1) {
 void AmoledDisplay::set_backlight(uint8_t percent) {
   const uint8_t level = static_cast<uint8_t>(255u * std::min<uint8_t>(percent, 100) / 100u);
   command(0x51, &level, 1);
+}
+
+void AmoledDisplay::set_sleep(bool asleep) {
+  if (!cfg_.sleep_when_dark) return;
+  if (!asleep && board_sleep) board_sleep(false);  // the processor at full speed for the redraw
+  command(asleep ? 0x10 : 0x11, nullptr, 0);       // sleep in / sleep out
+  // The controller needs this long before its next sleep command or pixels.
+  vTaskDelay(pdMS_TO_TICKS(120));
+  if (asleep && board_sleep) board_sleep(true);
 }
 
 }  // namespace hgp

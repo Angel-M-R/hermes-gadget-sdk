@@ -4,7 +4,7 @@ Wait for the device to show Ready. On the LCD board, BOOT is TALK and PLUS is CA
 
 | What you want to do | Control |
 |---|---|
-| Ask a question | Hold TALK, speak, and release to send |
+| Ask a question | Hold TALK, speak, and release to send. A recording stops after one minute |
 | Interrupt a spoken reply | Hold TALK to start speaking |
 | Discard a recording, close a card, or stop a turn | Tap CANCEL |
 | Start a fresh conversation | Hold CANCEL for two seconds |
@@ -16,7 +16,7 @@ Wait for the device to show Ready. On the LCD board, BOOT is TALK and PLUS is CA
 
 Long replies turn their own pages. Simulated boards with scroll buttons also accept Up and Down.
 
-A muted speaker still lets replies play at their own pace, silently, so the text keeps its timing. A screen switched off with PWR stays off while Hermes answers, so you can listen in the dark. A touch, a button, or a question from Hermes turns it back on.
+A muted speaker still lets replies play at their own pace, silently, so the text keeps its timing. A screen switched off with PWR stays off while Hermes answers, so you can listen in the dark. A touch, a button, or a question from Hermes turns it back on. On the AMOLED-1.8 the touch controller sleeps while the screen is off, so press BOOT or PWR instead of touching it.
 
 Boards with a battery gauge show the charge in the top bar: green while charging, red at 15% or less, and `USB` when no battery is fitted. On boards whose keys sit beside the screen, icons mark them: a microphone next to TALK, lit while recording, and a power symbol next to PWR.
 
@@ -47,6 +47,6 @@ Tap CANCEL to move to the next item, then tap TALK to change it. On a touchscree
 
 Volume, brightness, talk mode, and screen timeout survive restarts. Unavailable drivers show as unavailable. These checks help you test the hardware; a completed tone does not prove that a physical speaker produced sound.
 
-Screen timeout is off by default. When enabled, a brightness-capable display dims halfway through the idle period, then goes dark. The first button press or touch wakes it without recording or answering a prompt. Incoming replies and prompts wake it too. Recording, playback, settings, pairing and updates keep it awake. The processor and Wi-Fi remain running; this is screen sleep. Use the board's Power off control to shut down the device.
+Screen timeout is off by default. When enabled, a brightness-capable display dims halfway through the idle period, then goes dark. The first button press or touch wakes it without recording or answering a prompt. Incoming replies and prompts wake it too. Recording, playback, settings, pairing and updates keep it awake. The processor and Wi-Fi remain running; this is screen sleep. On the AMOLED-1.8 a dark screen also puts the panel and touch controller to sleep, so a touch does not wake it; press BOOT or PWR. The processor may slow to 80 MHz meanwhile. Use the board's Power off control to shut down the device.
 
 Incoming confirmation prompts and firmware updates close settings. You cannot open settings during a prompt or update. The USB console also accepts `settings`, `settings close`, and `set brightness 50`.

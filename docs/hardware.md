@@ -152,9 +152,11 @@ Board option `esp32s3-touch-amoled-18`, for the **V2** of Waveshare's 1.8" board
 | I2C bus | | SDA 15, SCL 14, 400 kHz |
 | BOOT key | | GPIO 0 |
 
-At start-up the firmware makes the four expander pins outputs, held low with the SD card deselected, then raises them together. That powers the panel and releases both resets. The touch controller gets a second reset just before it is first read, and its idle sleep is turned off: asleep, it stops answering I2C.
+At start-up the firmware makes the four expander pins outputs, held low with the SD card deselected, then raises them together. That powers the panel and releases both resets. The touch controller gets a second reset just before it is first read, and its idle sleep is turned off: asleep, it stops answering I2C. While the screen is dark the firmware puts it into deep sleep on purpose, and the same reset wakes it when the screen lights again.
 
-The ES8311 records as well as plays, so there is no ES7210. Hold the screen or the upper side key (BOOT) to talk. Swipe down to cancel. PWR reaches the ESP32 only through the AXP2101: a short press turns the screen off or back on, and holding it still powers the board off through the PMIC. A microphone icon beside BOOT and a power symbol beside PWR mark the keys on the right edge, and the top bar shows the battery charge. The IMU, RTC and SD card are not used.
+The ES8311 records as well as plays, so there is no ES7210. Hold the screen or the upper side key (BOOT) to talk. Swipe down to cancel. BOOT may lift for up to 0.4 s while you talk without ending the recording, so a recording is sent 0.4 s after you let go; holding the screen gets the same grace. PWR reaches the ESP32 only through the AXP2101: a short press turns the screen off or back on, and holding it still powers the board off through the PMIC. A microphone icon beside BOOT and a power symbol beside PWR mark the keys on the right edge, and the top bar shows the battery charge. The IMU, RTC and SD card are not used.
+
+While the screen is dark, after PWR or the idle timer, the CO5300 and the CST820 sleep and the processor may slow from 240 MHz to 80 MHz. Wi-Fi, the connection to Hermes and spoken replies carry on. A touch does not light the screen: press BOOT or PWR. How much battery this saves has not been measured.
 
 The speaker is quiet at the default 70% volume. Set it to 100% in the device settings, or with `set volume 100` on the serial console.
 
@@ -165,7 +167,7 @@ cd firmware/esp32
 pio run -e esp32s3-touch-amoled-18 -t upload -t monitor
 ```
 
-On the first flash, check the boot log for `CO5300 368x448 ready`, `codecs: speaker ready, microphones ready` and `touch ready`. The `diag` report's `i2c` should include `0x15` (CST820), `0x18` (ES8311), `0x20` (TCA9554) and `0x34` (AXP2101). Then check that the picture is upright with no stripe at the left or right edge, that a swipe down (not up) cancels, the microphone level, and a spoken reply. Record the result in the [verification table](hardware-validation.md).
+On the first flash, check the boot log for `CO5300 368x448 ready`, `codecs: speaker ready, microphones ready` and `touch ready`. The `diag` report's `i2c` should include `0x15` (CST820), `0x18` (ES8311), `0x20` (TCA9554) and `0x34` (AXP2101). Then check that the picture is upright with no stripe at the left or right edge, that a swipe down (not up) cancels, the microphone level, and a spoken reply. Turn the screen off with PWR: a touch should leave it dark, BOOT should light it with touch working again, and the log should show `processor may slow to 80 MHz`, then `processor at full speed`. Record the result in the [verification table](hardware-validation.md).
 
 Pin, panel and expander references: Waveshare's [board support package](https://components.espressif.com/components/waveshare/esp32_s3_touch_amoled_1_8) and its V2 examples. The port reuses the CO5300, AXP2101 and Espressif codec drivers; see the [license notes](../README.md#license).
 

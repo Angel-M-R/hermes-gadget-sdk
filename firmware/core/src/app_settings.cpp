@@ -148,6 +148,7 @@ void App::settings_tick() {
   }
   if (hardware_check_ == HardwareCheck::Speaker && !hal_.speaker->busy()) {
     hardware_check_ = HardwareCheck::None;
+    apply_volume();  // the tone played at the saved volume even if muted
     check_result_ = "Tone finished. Did you hear it?";
     update_model();
   }
@@ -166,7 +167,7 @@ void App::settings_model() {
       m.detail = "Speaker volume";
       m.body = !hal_.speaker ? "No speaker driver is active."
                : muted_       ? std::to_string(volume_) + "%, muted\n" +
-                                    (profile_.touch_screen ? "Hold the speaker icon to unmute." : "Console: set mute 0")
+                                    (profile_.touch_screen ? "Leave settings, then hold the speaker icon to unmute." : "Console: set mute 0")
                               : std::to_string(volume_) + "%\nChanges are saved.";
       break;
     case Menu::Brightness:
@@ -248,7 +249,9 @@ bool App::start_wifi_setup() {
   cancel_held_ = false;
   settings_chord_fired_ = false;
   wake_buttons_ = 0;
-  wifi_setup_text_ = on_wifi_setup();
+  WifiSetup setup = on_wifi_setup();
+  wifi_setup_text_ = std::move(setup.text);
+  wifi_setup_code_ = wifi_setup_text_.empty() ? std::string() : std::move(setup.join_code);
   if (wifi_setup_text_.empty()) set_hint_flash("Wi-Fi setup unavailable; use USB");
   update_model();
   return !wifi_setup_text_.empty();
@@ -257,6 +260,7 @@ bool App::start_wifi_setup() {
 void App::close_wifi_setup() {
   if (wifi_setup_text_.empty()) return;
   wifi_setup_text_.clear();
+  wifi_setup_code_.clear();
   if (on_wifi_setup_close) on_wifi_setup_close();
   update_model();
 }

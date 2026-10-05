@@ -123,6 +123,9 @@ BoardConfig make() {
   b.amoled.d3 = 7;
   b.amoled.gap_x = 16;  // the 368 columns start at 16 in the controller's RAM
   b.amoled.corner_radius = 40;  // measured on the glass: the bars' text stays clear of it
+  // Dark screen: the panel and the CST820 sleep and the processor slows down.
+  // A reset is all that wakes the CST820, so only BOOT and PWR light it again.
+  b.amoled.sleep_when_dark = true;
   b.expander_resets = {true, 0x20, 0x87, 0x80};  // P0, P1, P2 and P7; P7 stays high
   b.i2c = {15, 14, 400000};
   b.codec.enabled = true;
@@ -147,6 +150,10 @@ BoardConfig make() {
   b.talk_key = {'r', -100};
   b.power_key = {'r', 100};
   b.buttons = {0, -1, -1, -1};  // BOOT, the upper side key, also works as TALK
+  // BOOT is small and stiff, and the thumb holding it lifts for a moment now
+  // and then. With a 30 ms debounce like Buttons', the esp32-muse-agent port
+  // of this board saw that end recordings after 1 to 3 s (see NOTICE).
+  b.talk_release_grace_ms = 400;
   b.talk_label = "BOOT";
   b.cancel_label = "Swipe down";
   return b;

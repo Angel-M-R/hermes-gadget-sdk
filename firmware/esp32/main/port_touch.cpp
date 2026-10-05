@@ -20,6 +20,7 @@ constexpr uint32_t kPollMs = 20;
 constexpr uint8_t kTca9554Input = 0x00;
 constexpr uint8_t kCstAck = 0xAB;
 constexpr uint8_t kCst820Points = 0x02;      // finger count, then X and Y, 12 bits each
+constexpr uint8_t kCst820Sleep = 0xE5;        // 0x03: deep sleep until reset
 constexpr uint8_t kCst820NoAutoSleep = 0xFE;  // else it stops answering I2C when idle
 
 }  // namespace
@@ -46,17 +47,12 @@ bool TouchInput::begin(const TouchConfig& touch, const ExpanderKeyConfig& key, i
   } else if (touch.enabled && touch.controller == TouchController::Box3) {
     begin_box_touch(bus);
   } else if (touch.enabled && touch.controller == TouchController::Cst820) {
-    // Reset it again: idle since power-up it may have gone to sleep, and asleep it ignores I2C.
-    if (touch.expander_rst >= 0) expander::pulse(static_cast<uint8_t>(touch.expander_rst));
     i2c_device_config_t dev = {};
     dev.dev_addr_length = I2C_ADDR_BIT_LEN_7;
     dev.device_address = touch.addr;
     dev.scl_speed_hz = 400000;
-    if (i2c_master_bus_add_device(bus, &dev, &touch_dev_) == ESP_OK) {
-      const uint8_t stay_awake[2] = {kCst820NoAutoSleep, 0x01};
-      if (i2c_master_transmit(touch_dev_, stay_awake, sizeof(stay_awake), 50) != ESP_OK) {
-        ESP_LOGW(TAG, "touch controller at 0x%02x did not answer", touch.addr);
-      }
+    if (i2c_master_bus_add_device(bus, &dev, &touch_dev_) == ESP_OK && !reset_cst820()) {
+      ESP_LOGW(TAG, "touch controller at 0x%02x did not answer", touch.addr);
     }
   } else if (touch.enabled) {
     if (touch.rst >= 0) {
@@ -92,6 +88,18 @@ bool TouchInput::begin(const TouchConfig& touch, const ExpanderKeyConfig& key, i
   xTaskCreate(&TouchInput::task, "hg-touch", 3072, this, 5, nullptr);
   ESP_LOGI(TAG, "touch %s, key %s", has_touch() ? "ready" : "off", key_dev_ ? "ready" : "off");
   return true;
+}
+
+// Idle since power-up or put to sleep, a CST820 ignores I2C until its reset
+// line is pulsed. Afterwards it must be told again not to doze off.
+bool TouchInput::reset_cst820() {
+  if (touch_.expander_rst >= 0) expander::pulse(static_cast<uint8_t>(touch_.expander_rst));
+  const uint8_t stay_awake[2] = {kCst820NoAutoSleep, 0x01};
+  return i2c_master_transmit(touch_dev_, stay_awake, sizeof(stay_awake), 50) == ESP_OK;
+}
+
+bool TouchInput::can_sleep() const {
+  return touch_dev_ && touch_.controller == TouchController::Cst820 && touch_.expander_rst >= 0;
 }
 
 bool TouchInput::read_touch(TouchSample& out) {
@@ -172,9 +180,34 @@ bool TouchInput::read_key(bool& pressed) {
 void TouchInput::task(void* arg) {
   auto* self = static_cast<TouchInput*>(arg);
   bool was_touching = false, key_down = false;
+  bool failed = false;     // the last sleep or wake didn't take
+  TickType_t retry_at = 0;  // ...so wait until then; compared only while failed
   for (;;) {
+    const bool sleep = self->sleep_wanted_;
+    if (sleep == self->asleep_) failed = false;  // nothing left to retry
+    if (sleep != self->asleep_ && self->can_sleep() &&
+        (!failed || static_cast<int32_t>(xTaskGetTickCount() - retry_at) >= 0)) {
+      if (sleep && was_touching) {
+        // The finger is lifted for the app before the controller goes quiet.
+        TouchSample up{};
+        events::post(EventType::Touch, &up, sizeof(up));
+        was_touching = false;
+      }
+      const uint8_t deep_sleep[2] = {kCst820Sleep, 0x03};
+      const bool done = sleep ? i2c_master_transmit(self->touch_dev_, deep_sleep, sizeof(deep_sleep), 50) == ESP_OK
+                              : self->reset_cst820();
+      if (done) {
+        self->asleep_ = sleep;
+        failed = false;
+      } else {
+        // Stay as it was and try again: a wake that failed would leave touch dead.
+        retry_at = xTaskGetTickCount() + pdMS_TO_TICKS(1000);
+        if (!failed) ESP_LOGW(TAG, "touch controller did not %s; retrying", sleep ? "sleep" : "wake");
+        failed = true;
+      }
+    }
     TouchSample s{};
-    if (self->has_touch() && self->read_touch(s)) {
+    if (self->has_touch() && !self->asleep_ && self->read_touch(s)) {
       // Every sample while the finger is down (gestures need the motion), plus the lift.
       if (s.touching || was_touching) events::post(EventType::Touch, &s, sizeof(s));
       was_touching = s.touching;

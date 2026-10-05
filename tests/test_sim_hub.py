@@ -286,6 +286,20 @@ def test_amoled_18_profile_has_the_speaker_button_power_key_and_battery(devserve
     assert not sim.status()["display_sleeping"]
 
 
+def test_power_key_and_battery_drift_follow_the_board(devserver, make_sim):
+    hub, _brain, url = devserver()
+    plain = make_sim(url, board="sim-320x240")
+    assert plain.wait_screen("ready", timeout=10)
+    plain.power_key()  # this board has no power key
+    assert not plain.status()["display_sleeping"]
+    sim = make_sim(url, board="sim-368x448")
+    assert sim.wait_screen("ready", timeout=10)
+    sim.set_sensor("battery_pct", 42.51)
+    assert sim.wait_for(lambda: sim.status()["power"].get("battery_percent") == 43, timeout=7)
+    sim.drift_sensors()  # 42.49 now: the top bar and status follow the sensor
+    assert sim.wait_for(lambda: sim.status()["power"].get("battery_percent") == 42, timeout=7)
+
+
 def _update(loop_thread, sim, coro_fn):
     """Run a firmware update on the hub's loop while the simulated device keeps stepping."""
     import asyncio

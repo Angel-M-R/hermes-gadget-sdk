@@ -35,15 +35,21 @@ bool release_resets(const ExpanderResetConfig& cfg, i2c_master_bus_handle_t bus)
     g_dev = nullptr;
     return false;
   }
+  // A failed start leaves no device behind, so another call starts over.
+  auto fail = [] {
+    i2c_master_bus_rm_device(g_dev);
+    g_dev = nullptr;
+    return false;
+  };
   // Levels first, so no pin glitches high when it becomes an output.
   g_levels = cfg.idle;
   if (!write(kOutput, g_levels) || !write(kConfig, static_cast<uint8_t>(~cfg.outputs))) {
     ESP_LOGE(TAG, "TCA9554 at 0x%02x did not answer", cfg.addr);
-    return false;
+    return fail();
   }
   vTaskDelay(pdMS_TO_TICKS(20));
   g_levels |= cfg.outputs;
-  if (!write(kOutput, g_levels)) return false;
+  if (!write(kOutput, g_levels)) return fail();
   vTaskDelay(pdMS_TO_TICKS(150));  // the panel's own start-up after power and reset
   return true;
 }

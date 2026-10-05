@@ -46,6 +46,7 @@ idf_component_register(
         esp_lcd
         esp_netif
         esp_http_server
+        esp_pm
         esp_psram
         esp_timer
         esp_wifi

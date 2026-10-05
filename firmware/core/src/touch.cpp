@@ -7,9 +7,11 @@ namespace hg {
 void TouchGestures::press(Button b) { app_.on_button(b, true); }
 void TouchGestures::release(Button b) { app_.on_button(b, false); }
 
-void TouchGestures::tick(uint32_t now_ms) {
-  if (state_ == State::Speaker && now_ms - t0_ >= cfg_.speaker_hold_ms) {
-    state_ = State::Ignored;
+void TouchGestures::tick(uint32_t now_ms) { promote(now_ms, cfg_.sample_lag_ms); }
+
+void TouchGestures::promote(uint32_t now_ms, uint32_t lag) {
+  if (state_ == State::Speaker && now_ms - t0_ >= cfg_.speaker_hold_ms + lag) {
+    state_ = State::SpeakerHeld;  // pressed until the finger lifts
     app_.on_speaker_button(App::SpeakerTouch::Hold);
   }
   if (state_ == State::Settings && now_ms - t0_ >= 1000) {
@@ -32,6 +34,7 @@ void TouchGestures::update(bool touching, int x, int y, uint32_t now_ms) {
       case State::Talk: release(Button::Talk); break;
       case State::Swipe: release(Button::Cancel); break;
       case State::Speaker: app_.on_speaker_button(App::SpeakerTouch::Tap); break;
+      case State::SpeakerHeld: app_.on_speaker_button(App::SpeakerTouch::Leave); break;
       default: break;
     }
     state_ = State::Idle;
@@ -57,12 +60,26 @@ void TouchGestures::update(bool touching, int x, int y, uint32_t now_ms) {
                           dy >= cfg_.swipe_px && std::abs(dx) < dy;
   switch (state_) {
     case State::Speaker:
+      if (std::abs(dx) <= cfg_.slop_px && std::abs(dy) <= cfg_.slop_px) {
+        promote(now_ms, 0);
+        break;
+      }
+      // Sliding off the button leaves mute alone, but a slide down may become the cancel swipe.
+      app_.on_speaker_button(App::SpeakerTouch::Leave);
+      state_ = State::Sliding;
+      [[fallthrough]];
+    case State::Sliding:
+      if (swiped_down) {
+        state_ = State::Swipe;
+        press(Button::Cancel);
+      } else if (dy < 0 || std::abs(dx) >= std::abs(dy)) {
+        state_ = State::Ignored;
+      }
+      break;
+    case State::SpeakerHeld:
       if (std::abs(dx) > cfg_.slop_px || std::abs(dy) > cfg_.slop_px) {
-        // Sliding off the button leaves mute alone.
         app_.on_speaker_button(App::SpeakerTouch::Leave);
         state_ = State::Ignored;
-      } else {
-        tick(now_ms);
       }
       break;
     case State::Settings:
@@ -72,7 +89,7 @@ void TouchGestures::update(bool touching, int x, int y, uint32_t now_ms) {
       } else if (std::abs(dx) > cfg_.slop_px || std::abs(dy) > cfg_.slop_px) {
         state_ = State::Ignored;
       } else {
-        tick(now_ms);
+        promote(now_ms, 0);
       }
       break;
     case State::Pending:
@@ -83,7 +100,7 @@ void TouchGestures::update(bool touching, int x, int y, uint32_t now_ms) {
         // Neither a hold nor a downward swipe yet: wait for a clear swipe, else ignore.
         if (dy < 0 || std::abs(dx) >= std::abs(dy)) state_ = State::Ignored;
       } else {
-        tick(now_ms);
+        promote(now_ms, 0);
       }
       break;
     case State::Talk:

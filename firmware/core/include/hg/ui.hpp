@@ -13,6 +13,7 @@
 #include "hg/canvas.hpp"
 #include "hg/hal.hpp"
 #include "hg/mascot.hpp"
+#include "hg/qr.hpp"
 
 namespace hg {
 
@@ -45,6 +46,7 @@ struct UiModel {
   std::string headline;  // header band, next to the indicator
   std::string detail;    // secondary line (status phrase, URL, error)
   std::string body;      // main text (reply, card body)
+  std::string qr;        // text screens: a QR code's text, drawn with the body where it fits
   std::string code;      // pairing code
   int scroll = -1;       // first visible body line; -1 pins to the end
   uint8_t level = 0;     // microphone level 0..100
@@ -116,6 +118,10 @@ class Ui {
   void draw_top(Canvas& c, const UiModel& m);
   void draw_header(Canvas& c, const UiModel& m);
   void draw_content(Canvas& c, const UiModel& m);
+  // The body with the model's QR code above it, or beside it with smaller
+  // text, between rows top and bottom. False when no layout gives a code of
+  // readable size; the body is then drawn alone.
+  bool draw_qr_body(Canvas& c, const UiModel& m, int top, int bottom);
   void draw_bottom(Canvas& c, const UiModel& m);
   void draw_indicator(Canvas& c, const UiModel& m, int cx, int cy, int r);
   struct HeroGeom {
@@ -140,6 +146,9 @@ class Ui {
   bool hero_valid_ = false;
   bool valid_ = false;
   Circle speaker_;  // as last drawn, for speaker_hit
+  bool speaker_in_header_ = false;  // its touch area ends with the header band
+  std::string qr_text_;  // what qr_ encodes, so a code is built once
+  QrCode qr_;
   // Rounded corners: extra bar height above the top text and below the bottom
   // text, and how far each bar's text keeps from the side edges.
   int bar_pad_ = 0, top_inset_ = 0, bottom_inset_ = 0;

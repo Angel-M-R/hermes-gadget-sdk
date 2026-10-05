@@ -84,7 +84,7 @@ void Wifi::setup_status(std::string status) {
   setup_state_ = std::move(status);
 }
 
-std::string Wifi::start_setup() {
+hg::App::WifiSetup Wifi::start_setup() {
   if (!http_) {
     esp_netif_ip_info_t station{};
     auto* sta = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
@@ -132,8 +132,9 @@ std::string Wifi::start_setup() {
     setup_until_ = static_cast<uint32_t>(esp_timer_get_time() / 1000) + 600000;
     close_at_ = 0;
   }
-  return "Network: " + ap_name_ + "\nPassword: " + ap_password_ +
-         "\nOpen http://192.168.4.1\nAvailable for 10 minutes.";
+  return {"Network: " + ap_name_ + "\nPassword: " + ap_password_ +
+              "\nOpen http://192.168.4.1\nAvailable for 10 minutes.",
+          hg::wifi_join_code(ap_name_, ap_password_)};
 }
 
 void Wifi::stop_setup() {

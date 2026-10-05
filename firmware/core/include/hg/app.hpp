@@ -58,6 +58,12 @@ struct DeviceProfile {
   };
   KeyMark talk_key;   // a microphone, lit while recording
   KeyMark power_key;  // a power symbol: the key that turns the screen off (App::on_power_key)
+  // A TALK key that lifts for a moment under the thumb holding it (the
+  // AMOLED-1.8's small BOOT key). While a held recording runs, a release
+  // counts only once TALK has stayed up this long; a press before then
+  // continues the same recording. Applies to every TALK release, holding the
+  // screen included. 0 ends the recording at the release.
+  uint16_t talk_release_grace_ms = 0;
 };
 
 // A device-side capability the agent may invoke. `params` is a JSON-schema
@@ -108,7 +114,8 @@ class App {
   // from Hermes still wakes it.
   void on_power_key();
   // The on-screen speaker button (touch screens with a speaker): holding it
-  // mutes or unmutes, a tap only says so. TouchGestures reports the touch.
+  // mutes or unmutes, a tap only says so. TouchGestures reports the touch;
+  // Leave is the finger sliding off, or lifting after a hold.
   enum class SpeakerTouch : uint8_t { Down, Hold, Tap, Leave };
   bool speaker_button_hit(int x, int y) const;
   void on_speaker_button(SpeakerTouch touch);
@@ -116,8 +123,14 @@ class App {
   bool start_wifi_setup();
   void close_wifi_setup();
   bool wifi_setup_open() const { return !wifi_setup_text_.empty(); }
-  // These run on the app task. Start returns private, on-screen instructions.
-  std::function<std::string()> on_wifi_setup;
+  // These run on the app task. Start returns private, on-screen instructions
+  // (empty when setup can't start) and, for a QR code beside them, the text
+  // that joins the setup network (wifi_join_code).
+  struct WifiSetup {
+    std::string text;
+    std::string join_code;
+  };
+  std::function<WifiSetup()> on_wifi_setup;
   std::function<void()> on_wifi_setup_close;
 
   // Serial-console command (provisioning, bench automation). Returns the
@@ -195,6 +208,8 @@ class App {
   void apply_volume();
   // Wakes the screen for something Hermes does, unless the user switched it off.
   void wake_for_activity();
+  // Turns the screen dark, the panel's sleep included.
+  void darken_display();
   void power_tick();
   json::Value power_value() const;
   json::Value status_value() const;
@@ -207,6 +222,8 @@ class App {
   void send_hello();
   bool can_talk() const;
   void start_listening(bool hands_free);
+  // TALK let go of a held recording at `released_at`: sends it, or discards a tap.
+  void release_talk(uint32_t released_at);
   void finish_listening();
   void cancel_listening(std::string_view why);
   void stop_playback();
@@ -254,10 +271,12 @@ class App {
   Menu menu_ = Menu::Closed;
   HardwareCheck hardware_check_ = HardwareCheck::None;
   std::string check_result_;
-  std::string wifi_setup_text_;
+  std::string wifi_setup_text_, wifi_setup_code_;
   bool talk_held_ = false;
   bool settings_chord_fired_ = false;
   uint32_t talk_down_at_ = 0;
+  bool talk_release_pending_ = false;  // TALK is up, within talk_release_grace_ms
+  uint32_t talk_up_at_ = 0;
   std::optional<PowerStatus> power_status_;
   uint32_t power_read_at_ = 0, activity_at_ = 0;
   uint32_t screen_timeout_ms_ = 0;
