@@ -61,6 +61,9 @@ BOARDS = {
     "sim-368x448": Board("sim-368x448", 368, 448, scroll_buttons=False, touch=True,
                          talk_key=("r", -100), power_key=("r", 100), battery=True, corner_radius=40,
                          emissive=True),
+    # A 1.9" 320x170 board with no audio hardware (e.g. LilyGO T-Display-S3).
+    "sim-320x170-nospeaker": Board("sim-320x170-nospeaker", 320, 170, mic=False, speaker=False,
+                                   scroll_buttons=False),
 }
 
 
