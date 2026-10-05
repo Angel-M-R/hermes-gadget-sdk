@@ -1400,6 +1400,13 @@ TEST("power: a dark screen sleeps the panel, which wakes before its backlight re
   CHECK_EQ(r.fake.brightness_at_sleep_change, 0);
   CHECK_EQ(r.fake.brightness, 60);
   CHECK_EQ(r.fake.sleep_changes, 6);
+
+  // A question stays on screen through the power key.
+  r.server(R"({"type":"prompt","id":"q1","text":"Continue?"})");
+  r.app.on_power_key();
+  CHECK(!r.fake.asleep);
+  CHECK_EQ(r.fake.brightness, 60);
+  CHECK_EQ(r.fake.sleep_changes, 6);
 }
 
 TEST("power: failed readings replace stale data and shutdown requires a second local selection") {

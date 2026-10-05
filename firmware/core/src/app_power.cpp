@@ -35,8 +35,8 @@ void App::on_power_key() {
     wake_display();
     return;
   }
-  // Phone setup's password and an update's progress stay on screen.
-  if (!wifi_setup_text_.empty() || ota_busy() || ota_ == Ota::Restarting) return;
+  // Phone setup's password, a question and an update's progress stay on screen.
+  if (!wifi_setup_text_.empty() || prompt_showing() || ota_busy() || ota_ == Ota::Restarting) return;
   display_off_by_user_ = true;
   darken_display();
 }
@@ -51,7 +51,7 @@ void App::power_tick() {
   if (!hal_.display || !hal_.display->info().has_backlight) return;
   if (display_off_by_user_) {
     // Off stays off through replies; a question or an update still shows.
-    if (prompt_showing() || ota_busy()) wake_display();
+    if (prompt_showing() || ota_busy() || ota_ == Ota::Restarting) wake_display();
     return;
   }
   if (!screen_timeout_ms_) return;
