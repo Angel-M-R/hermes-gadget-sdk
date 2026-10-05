@@ -136,8 +136,13 @@ BoardConfig make() {
   b.touch.expander_rst = 2;
   b.touch.width = 368;
   b.touch.height = 448;
-  // PWR reaches the ESP32 only through the AXP2101, so it keeps its hardware role.
+  // PWR reaches the ESP32 only through the AXP2101: a short press turns the
+  // screen off or on, a long one is still the PMIC's power-off.
   b.axp2101 = true;
+  b.axp_power_key = true;
+  // Both keys are on the right edge, BOOT above PWR.
+  b.talk_key = {'r', -100};
+  b.power_key = {'r', 100};
   b.buttons = {0, -1, -1, -1};  // BOOT, the upper side key, also works as TALK
   b.talk_label = "BOOT";
   b.cancel_label = "Swipe down";

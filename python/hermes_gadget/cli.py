@@ -81,6 +81,8 @@ def _script_step(sim, cmd: str, rest: str) -> None:
         print(f"speaking {rest} ({sim.speak_wav(rest):.1f}s)")
     elif cmd == "sleep":
         sim.run_for(float(rest))
+    elif cmd == "power":
+        sim.power_key()
     elif cmd == "console":
         print(sim.console(rest))
     elif cmd == "status":

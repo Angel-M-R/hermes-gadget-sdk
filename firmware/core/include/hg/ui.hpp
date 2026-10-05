@@ -57,6 +57,20 @@ struct UiModel {
   // instead of the header + text layout.
   bool hero = false;
   uint8_t caption_lines = 1;  // hero: lines the detail may wrap to (then "..")
+  // Top bar: battery charge in percent (-1 = no reading), charging, and USB
+  // power with no battery fitted.
+  int8_t battery = -1;
+  bool charging = false;
+  bool usb_power = false;
+  // Conversation screens on touch boards: the speaker button (top left on the
+  // mascot screens, end of the header otherwise), muted, and a finger on it.
+  bool speaker_button = false;
+  bool muted = false;
+  bool speaker_pressed = false;
+  // Icons beside the physical keys on the mascot conversation screens: edge
+  // ('l', 'r', 0 = none) and offset from the vertical centre (DeviceProfile::KeyMark).
+  char talk_edge = 0, power_edge = 0;
+  int16_t talk_dy = 0, power_dy = 0;
 };
 
 struct UiLayout {
@@ -87,8 +101,18 @@ class Ui {
   bool title_hit(int x, int y) const {
     return x >= ox_ && x < ox_ + info_.width && y >= oy_ && y < oy_ + layout_.top_h;
   }
+  // Panel coordinates inside the speaker button as last drawn (with a margin
+  // for fingers); false while it isn't on screen.
+  bool speaker_hit(int x, int y) const;
 
  private:
+  struct Circle {
+    int cx = 0, cy = 0, r = 0;  // r == 0: not drawn
+  };
+  void draw_speaker(Canvas& c, const UiModel& m, Circle where);
+  // Where the speaker button goes on the mascot screens and in the header band.
+  Circle hero_speaker(const UiModel& m) const;
+  Circle header_speaker(const UiModel& m) const;
   void draw_top(Canvas& c, const UiModel& m);
   void draw_header(Canvas& c, const UiModel& m);
   void draw_content(Canvas& c, const UiModel& m);
@@ -100,6 +124,8 @@ class Ui {
     std::vector<std::string> detail;  // wrapped, already truncated
   };
   HeroGeom hero_geom(const UiModel& m) const;
+  // The key icons, each left out where a caption line would cross it.
+  void draw_key_marks(Canvas& c, const UiModel& m, const HeroGeom& g);
   void draw_hero(Canvas& c, const UiModel& m);
   // Rows [y0, y1) that hero animations may touch for this screen.
   void hero_anim_rows(const UiModel& m, int& y0, int& y1) const;
@@ -113,6 +139,7 @@ class Ui {
   uint32_t hero_static_ = 0, hero_anim_ = 0;
   bool hero_valid_ = false;
   bool valid_ = false;
+  Circle speaker_;  // as last drawn, for speaker_hit
 };
 
 }  // namespace hg

@@ -22,7 +22,7 @@ extern "C" {
 #define HGSIM_API __attribute__((visibility("default")))
 #endif
 
-#define HGSIM_ABI_VERSION 5
+#define HGSIM_ABI_VERSION 6
 
 typedef struct hgsim hgsim;
 
@@ -86,6 +86,10 @@ typedef struct hgsim_config {
   int touch; /* the screen is the main input (see hg::TouchGestures) */
   size_t update_capacity; /* bytes the update slot holds; 0 = no over-the-air updates */
   int update_pending;     /* this boot runs an installed update that isn't confirmed yet */
+  /* Physical keys beside the screen, marked by icons (see hg::DeviceProfile::KeyMark):
+   * the edge, 'l' or 'r' (0 = no icon), and the offset in pixels from the vertical centre. */
+  int talk_key_edge, talk_key_dy;
+  int power_key_edge, power_key_dy;
 } hgsim_config;
 
 /* Action handler: fill `result_json` (a JSON object) and return 1, or write an
@@ -114,6 +118,11 @@ HGSIM_API void hgsim_mic_samples(hgsim* sim, const int16_t* samples, size_t coun
 HGSIM_API void hgsim_submit_text(hgsim* sim, const char* text);
 HGSIM_API void hgsim_set_sensor(hgsim* sim, const char* name, double value);
 HGSIM_API void hgsim_emit_event(hgsim* sim, const char* name, const char* data_json, int notify_agent);
+/* Battery and supply as a power chip reports them (see hg::Power); the first call
+ * gives the device one. battery_percent < 0: no battery fitted. */
+HGSIM_API void hgsim_set_power(hgsim* sim, int battery_percent, int charging, int external_power);
+/* A short press of the board's power key (see hg::App::on_power_key). */
+HGSIM_API void hgsim_power_key(hgsim* sim);
 
 /* Serial-console command; returns the response length (written into out). */
 HGSIM_API int hgsim_console(hgsim* sim, const char* line, char* out, size_t cap);

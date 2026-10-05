@@ -1,7 +1,9 @@
 #include "hg/ui.hpp"
 
 #include <algorithm>
+#include <cstdlib>
 #include <cstring>
+#include <iterator>
 #include <vector>
 
 #include "hg/font.hpp"
@@ -102,6 +104,72 @@ uint32_t hero_anim_key(const UiModel& m) {
   return h.get();
 }
 
+// Small icons as pixel rows ('#' = set), drawn at an integer scale.
+constexpr const char* kSpeakerOn[] = {
+    "....#...#..",
+    "...##....#.",
+    "..###.#...#",
+    "#####..#..#",
+    "#####..#..#",
+    "#####..#..#",
+    "..###.#...#",
+    "...##....#.",
+    "....#...#..",
+};
+constexpr const char* kSpeakerMuted[] = {
+    "....#......",
+    "...##......",
+    "..###.#...#",
+    "#####..#.#.",
+    "#####...#..",
+    "#####..#.#.",
+    "..###.#...#",
+    "...##......",
+    "....#......",
+};
+constexpr const char* kMic[] = {
+    "..###..",
+    ".#####.",
+    ".#####.",
+    ".#####.",
+    ".#####.",
+    "#.###.#",
+    "#.....#",
+    ".#...#.",
+    "..###..",
+    "...#...",
+    ".#####.",
+};
+constexpr const char* kPower[] = {
+    "....#....",
+    "..#.#.#..",
+    ".#..#..#.",
+    "#...#...#",
+    "#.......#",
+    "#.......#",
+    ".#.....#.",
+    "..#####..",
+};
+
+template <size_t N>
+constexpr int glyph_w(const char* const (&rows)[N]) {
+  return static_cast<int>(std::char_traits<char>::length(rows[0]));
+}
+
+template <size_t N>
+void glyph(Canvas& c, int x, int y, const char* const (&rows)[N], int scale, uint16_t color) {
+  for (size_t r = 0; r < N; ++r) {
+    for (int col = 0; rows[r][col]; ++col) {
+      if (rows[r][col] == '#') c.fill_rect(x + col * scale, y + static_cast<int>(r) * scale, scale, scale, color);
+    }
+  }
+}
+
+// Screens with the speaker button and the key icons: the conversation itself.
+bool conversation(Screen s) {
+  return s == Screen::Ready || s == Screen::Listening || s == Screen::Thinking || s == Screen::Responding;
+}
+
 uint16_t caption_color(Screen s) {
   switch (s) {
     case Screen::Listening: return kGreen;
@@ -189,14 +257,21 @@ void Ui::render(const UiModel& m) {
   const int y_content = y_header + layout_.header_h;
   const int y_bottom = h - layout_.bottom_h;
 
+  // A round panel's corners and header ends are too close to the glass edge for the button.
+  const bool speaker = m.speaker_button && !panel_.round && conversation(m.screen);
+  speaker_ = speaker ? (m.hero ? hero_speaker(m) : header_speaker(m)) : Circle{};
+
   uint32_t hashes[4];
-  hashes[0] = Hash().add(m.title).val(m.link).get();
+  hashes[0] = Hash().add(m.title).val(m.link).val(m.battery).val(m.charging).val(m.usb_power).get();
   hashes[1] = Hash()
                   .val(m.screen)
                   .add(m.headline)
                   .val(animated(m.screen) ? m.frame : 0u)
                   .val(m.screen == Screen::Listening ? m.level : uint8_t(0))
                   .val(m.speaking)
+                  .val(speaker)
+                  .val(m.muted)
+                  .val(m.speaker_pressed)
                   .get();
   hashes[2] = Hash().val(m.screen).add(m.detail).add(m.body).add(m.code).val(m.scroll).val(m.color_test).get();
   hashes[3] = Hash().add(m.hint).get();
@@ -212,7 +287,21 @@ void Ui::render(const UiModel& m) {
       flush(y0, y1);
       hash_[i] = hashes[i];
     }
-    uint32_t stat = Hash().val(m.screen).add(m.headline).add(m.detail).add(m.yes).add(m.no).val(m.caption_lines).get();
+    uint32_t stat = Hash()
+                        .val(m.screen)
+                        .add(m.headline)
+                        .add(m.detail)
+                        .add(m.yes)
+                        .add(m.no)
+                        .val(m.caption_lines)
+                        .val(speaker)
+                        .val(m.muted)
+                        .val(m.speaker_pressed)
+                        .val(m.talk_edge)
+                        .val(m.talk_dy)
+                        .val(m.power_edge)
+                        .val(m.power_dy)
+                        .get();
     uint32_t anim = hero_anim_key(m);
     int y0 = y_header, y1 = y_bottom;
     bool redraw = !valid_ || !hero_valid_ || stat != hero_static_;
@@ -283,7 +372,30 @@ void Ui::draw_top(Canvas& c, const UiModel& m) {
   c.text(label_x, ty, label, s, kDim);
   int r = std::max(2, 3 * s / 2 + 1);
   c.fill_circle(label_x - 3 * s - r, layout_.top_h / 2, r, dot);
-  int title_cols = cols_for(label_x - 6 * s - 2 * r - 3 * s, s);
+  int left_of = label_x - 6 * s - 2 * r;  // where the next item must end
+
+  // Battery: an outline filled to the charge, then the percentage; "USB" on mains with no battery.
+  if (m.battery >= 0 || m.usb_power) {
+    const bool low = m.battery >= 0 && m.battery <= 15 && !m.charging;
+    const uint16_t tone = m.charging ? kGreen : low ? kRed : kDim;
+    std::string pct = m.battery >= 0 ? std::to_string(m.battery) + "%" : "USB";
+    int tx = left_of - Canvas::text_width(pct, s);
+    c.text(tx, ty, pct, s, tone);
+    left_of = tx - 2 * s;
+    if (m.battery >= 0) {
+      const int bh = 7 * s, bw = 11 * s, nub = std::max(1, s);
+      const int bx = left_of - nub - bw, by = (layout_.top_h - bh) / 2;
+      c.rect(bx, by, bw, bh, kDim);
+      c.fill_rect(bx + bw, by + bh / 3, nub, bh - 2 * (bh / 3), kDim);
+      const int inner = bw - 2 * s - (s > 1 ? 1 : 0);
+      const int fill = std::max(m.battery > 0 ? 1 : 0, inner * m.battery / 100);
+      c.fill_rect(bx + s, by + s, fill, bh - 2 * s, tone == kDim ? kText : tone);
+      left_of = bx - 3 * s;
+    } else {
+      left_of -= s;
+    }
+  }
+  int title_cols = cols_for(left_of - 3 * s, s);
   c.text(3 * s, ty, fit(m.title, title_cols), s, kText);
 }
 
@@ -376,7 +488,12 @@ void Ui::draw_header(Canvas& c, const UiModel& m) {
   draw_indicator(c, m, cx, cy, r);
   int tx = cx + r + 4 * s;
   int hs = s + 1;
-  int cols = cols_for(info_.width - tx - 2 * s, hs);
+  int right = info_.width - 2 * s;
+  if (speaker_.r) {
+    draw_speaker(c, m, speaker_);
+    right = speaker_.cx - speaker_.r - 2 * s;
+  }
+  int cols = cols_for(right - tx, hs);
   c.text(tx, cy - (font::kGlyphHeight * hs) / 2, fit(m.headline, cols), hs, kText);
   c.fill_rect(4 * s, y0 + hh - 1, info_.width - 8 * s, 1, kFaint);
 }
@@ -569,6 +686,8 @@ void Ui::draw_hero(Canvas& c, const UiModel& m) {
     case Screen::Updating: dots(kAccent, kAccentDim); break;
     default: break;
   }
+  if (speaker_.r) draw_speaker(c, m, speaker_);
+  if (conversation(m.screen)) draw_key_marks(c, m, g);
 
   // Caption: headline, then the detail lines, centred.
   const int cols = layout_.hero_cols;
@@ -592,6 +711,62 @@ void Ui::draw_hero(Canvas& c, const UiModel& m) {
     if (!m.yes.empty()) button(margin, m.yes, kGreenDim);
     if (!m.no.empty()) button(margin + bw + gap, m.no, kRedDim);
   }
+}
+
+Ui::Circle Ui::hero_speaker(const UiModel&) const {
+  const int s = layout_.scale;
+  const int r = 18 * s;  // a thumb-sized target: 72 px across at scale 2
+  return {4 * s + r, layout_.top_h + 4 * s + r, r};
+}
+
+Ui::Circle Ui::header_speaker(const UiModel&) const {
+  const int s = layout_.scale;
+  const int r = layout_.header_h / 2 - 2 * s;  // the same size as the indicator on the left
+  return {info_.width - 4 * s - r, layout_.top_h + layout_.header_h / 2, r};
+}
+
+bool Ui::speaker_hit(int x, int y) const {
+  if (!speaker_.r) return false;
+  const int lx = x - ox_, ly = y - oy_;
+  const int reach = speaker_.r + 6 * layout_.scale;  // fingers are wider than the icon
+  // Never steal the title bar: holding it opens the settings.
+  return ly >= layout_.top_h && std::abs(lx - speaker_.cx) <= reach && std::abs(ly - speaker_.cy) <= reach;
+}
+
+void Ui::draw_speaker(Canvas& c, const UiModel& m, Circle at) {
+  // Muted stands out, like a lit button; on is quiet.
+  c.fill_circle(at.cx, at.cy, at.r, m.muted ? kText : kBar);
+  if (m.speaker_pressed) c.ring(at.cx, at.cy, at.r, std::max(2, layout_.scale), kAccent);
+  const int gw = glyph_w(kSpeakerOn), gh = static_cast<int>(std::size(kSpeakerOn));
+  const int gs = std::max(1, at.r * 6 / 5 / gw);
+  const int gx = at.cx - gw * gs / 2, gy = at.cy - gh * gs / 2;
+  if (m.muted) glyph(c, gx, gy, kSpeakerMuted, gs, kBg);
+  else glyph(c, gx, gy, kSpeakerOn, gs, kDim);
+}
+
+void Ui::draw_key_marks(Canvas& c, const UiModel& m, const HeroGeom& g) {
+  const int s = layout_.scale, w = info_.width, lh = Canvas::line_height(s);
+  // The caption lines under the mascot, centred: an icon never sits on one.
+  const std::string head = fit(m.headline, layout_.hero_cols);
+  auto crosses_caption = [&](int x0, int y0, int x1, int y1) {
+    for (size_t i = 0; i <= g.detail.size(); ++i) {
+      const int tw = Canvas::text_width(i == 0 ? head : g.detail[i - 1], s);
+      const int ly = g.caption_y + static_cast<int>(i) * lh;
+      if (y0 < ly + lh && y1 > ly && x0 < (w + tw) / 2 + s && x1 > (w - tw) / 2 - s) return true;
+    }
+    return false;
+  };
+  auto place = [&](char edge, int dy, int gw, int gh, int& x, int& y) {
+    if (edge != 'l' && edge != 'r') return false;
+    x = edge == 'r' ? w - 3 * s - gw * s : 3 * s;
+    y = info_.height / 2 + dy - gh * s / 2;
+    return !crosses_caption(x, y, x + gw * s, y + gh * s);
+  };
+  int x = 0, y = 0;
+  if (place(m.talk_edge, m.talk_dy, glyph_w(kMic), static_cast<int>(std::size(kMic)), x, y))
+    glyph(c, x, y, kMic, s, m.screen == Screen::Listening ? kGreen : kDim);
+  if (place(m.power_edge, m.power_dy, glyph_w(kPower), static_cast<int>(std::size(kPower)), x, y))
+    glyph(c, x, y, kPower, s, kDim);
 }
 
 void Ui::draw_bottom(Canvas& c, const UiModel& m) {

@@ -268,6 +268,24 @@ def test_round_touch_board_talks_with_the_screen(devserver, make_sim):
     assert sim.console("set touch_cancel pwr") == "@ok touch_cancel"
 
 
+def test_amoled_18_profile_has_the_speaker_button_power_key_and_battery(devserver, make_sim):
+    hub, _brain, url = devserver()
+    sim = make_sim(url, board="sim-368x448")
+    assert sim.wait_screen("ready", timeout=10)
+    sim.set_sensor("battery_pct", 42)
+    assert sim.wait_for(lambda: sim.status()["power"].get("battery_percent") == 42, timeout=7)
+    # Holding the speaker button (top left) mutes; it never starts a recording.
+    sim.touch(True, 32, 54)
+    sim.run_for(0.6)
+    sim.touch(False)
+    assert sim.console("get mute") == '@value {"key":"mute","value":"1"}'
+    assert not any(m["type"] == "audio.start" for m in sim.sent)
+    sim.power_key()
+    assert sim.status()["display_sleeping"]
+    sim.power_key()
+    assert not sim.status()["display_sleeping"]
+
+
 def _update(loop_thread, sim, coro_fn):
     """Run a firmware update on the hub's loop while the simulated device keeps stepping."""
     import asyncio

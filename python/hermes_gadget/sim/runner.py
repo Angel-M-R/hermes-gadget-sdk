@@ -39,6 +39,10 @@ class Board:
     scroll_buttons: bool = True
     round: bool = False  # circular panel: pixels outside the circle are not shown
     touch: bool = False  # touchscreen: hold to talk, tap to answer yes, swipe down to cancel
+    # Physical keys beside the screen, marked by icons: (edge 'l' or 'r', offset from the centre).
+    talk_key: tuple[str, int] | None = None
+    power_key: tuple[str, int] | None = None  # also turns the screen off and on (Simulator.power_key)
+    battery: bool = False  # a power chip reports the battery, shown in the top bar
 
 
 BOARDS = {
@@ -51,7 +55,8 @@ BOARDS = {
     # A 1.75" round 466x466 AMOLED touch board (e.g. ESP32-S3-Touch-AMOLED-1.75): no scroll buttons.
     "sim-466x466-round": Board("sim-466x466-round", 466, 466, scroll_buttons=False, round=True, touch=True),
     # A 1.8" 368x448 AMOLED touch board (e.g. ESP32-S3-Touch-AMOLED-1.8): no scroll buttons.
-    "sim-368x448": Board("sim-368x448", 368, 448, scroll_buttons=False, touch=True),
+    "sim-368x448": Board("sim-368x448", 368, 448, scroll_buttons=False, touch=True,
+                         talk_key=("r", -100), power_key=("r", 100), battery=True),
 }
 
 
@@ -161,7 +166,7 @@ class Simulator:
             server_url=url, access_token=token, mic=b.mic, speaker=b.speaker, backlight=b.backlight,
             scroll_buttons=b.scroll_buttons, library=library, button_labels=button_labels,
             round_panel=b.round, touch_screen=b.touch, update_capacity=UPDATE_SLOT_BYTES,
-            update_pending=update_pending)
+            update_pending=update_pending, talk_key=b.talk_key, power_key=b.power_key)
         self._round_spans = _circle_spans(b.width, b.height) if b.round else None
         self._register_actions()
 
@@ -312,6 +317,8 @@ class Simulator:
         self.device.begin()
         self.device.set_sensor("battery_pct", round(self.peripherals.battery))
         self.device.set_sensor("temperature_c", self.peripherals.temperature_c)
+        if self.board.battery:
+            self.device.set_power(round(self.peripherals.battery))
         self.set_network(network)
 
     def set_network(self, up: bool) -> None:
@@ -415,6 +422,14 @@ class Simulator:
 
     def set_sensor(self, name: str, value: float) -> None:
         self.device.set_sensor(name, value)
+        if name == "battery_pct":
+            self.peripherals.battery = value
+            if self.board.battery:
+                self.device.set_power(round(value))
+
+    def power_key(self) -> None:
+        """A short press of the power key (boards with one): the screen goes off, or back on."""
+        self.device.power_key()
 
     def console(self, line: str) -> str:
         return self.device.console(line)

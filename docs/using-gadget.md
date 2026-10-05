@@ -9,10 +9,16 @@ Wait for the device to show Ready. On the LCD board, BOOT is TALK and PLUS is CA
 | Discard a recording, close a card, or stop a turn | Tap CANCEL |
 | Start a fresh conversation | Hold CANCEL for two seconds |
 | Answer a confirmation question | TALK means yes; CANCEL means no |
+| Mute or unmute the speaker | On a touchscreen, hold the speaker button at the top left for 0.4 s; a tap only shows how. Over USB: `set mute 1` or `set mute 0` |
+| Turn the screen off or on | Press PWR on boards that have it (AMOLED-1.8) |
 | Type in the simulator | Enter a message in the text box and press Enter |
 | Save the simulator's device screen | Press Ctrl+S |
 
 Long replies turn their own pages. Simulated boards with scroll buttons also accept Up and Down.
+
+A muted speaker still lets replies play at their own pace, silently, so the text keeps its timing. A screen switched off with PWR stays off while Hermes answers, so you can listen in the dark. A touch, a button, or a question from Hermes turns it back on.
+
+Boards with a battery gauge show the charge in the top bar: green while charging, red at 15% or less, and `USB` when no battery is fitted. On boards whose keys sit beside the screen, icons mark them: a microphone next to TALK, lit while recording, and a power symbol next to PWR.
 
 Try asking Hermes to show a reminder on the screen. The agent can use `gadget_display` to display a card. Devices with actions can also respond to requests such as "Turn the LED purple."
 

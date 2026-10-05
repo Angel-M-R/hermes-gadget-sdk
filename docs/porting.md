@@ -95,6 +95,8 @@ Boards like the ESP32-S3-BOX family and the ESP32-S3-Touch-AMOLED-1.75 route aud
 
 Set `DeviceProfile::has_cancel_button`, `has_scroll_buttons` and the labels so the hint bar and the `hello` capabilities match the hardware.
 
+Keys that sit beside the screen can be marked with icons: set `DeviceProfile::talk_key` and `power_key` to the edge (`'l'` or `'r'`) and the key's offset from the screen's vertical centre. A key that should turn the screen off and on calls `App::on_power_key()` on each short press; the AMOLED-1.8 reads its PWR key's short-press interrupt from the AXP2101 (`Axp2101::take_short_press`). Touch screens with a speaker get the speaker button for mute automatically.
+
 ## Sensors
 
 Call `app.set_sensor("co2_ppm", value)` whenever you have a reading; the core rate-limits reporting. The agent sees the latest values (with their age) through `gadget_devices`. Sensor names are free-form; include the unit (`temperature_c`, `humidity_pct`).

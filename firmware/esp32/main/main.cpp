@@ -181,6 +181,7 @@ extern "C" void app_main(void) {
   if (board.mic.enabled && g_mic.begin(board.mic)) hal.mic = &g_mic;
   if (board.speaker.enabled && g_speaker.begin(board.speaker)) hal.speaker = &g_speaker;
   if (board.axp2101 && g_power.begin(i2c_bus)) hal.power = &g_power;
+  const bool power_key = board.axp_power_key && hal.power == &g_power && g_power.enable_power_key();
   const bool audio_power = peripherals_ready && (!board.axp_audio_supply || g_power.enable_audio_supply());
   if (!audio_power) ESP_LOGE(TAG, "audio supply unavailable");
   if (board.codec.enabled && audio_power && g_codec.begin(board.codec, i2c_bus)) {
@@ -214,6 +215,8 @@ extern "C" void app_main(void) {
   profile.has_scroll_buttons = board.buttons.up >= 0 && board.buttons.down >= 0;
   profile.talk_label = board.talk_label;
   profile.cancel_label = board.cancel_label;
+  profile.talk_key = {board.talk_key.edge, board.talk_key.dy};
+  if (power_key) profile.power_key = {board.power_key.edge, board.power_key.dy};
   if (touch && board.touch.enabled) {
     profile.touch_screen = true;
     profile.extra_settings = {"touch_cancel"};
@@ -240,6 +243,7 @@ extern "C" void app_main(void) {
   app.begin();
   hgp::console::begin();
 
+  uint32_t power_key_at = 0;
   for (;;) {
     hgp::Event ev;
     // Block briefly for events, then run the core's timers and animations.
@@ -250,6 +254,10 @@ extern "C" void app_main(void) {
       } while (hgp::events::receive(ev, 0));
     }
     g_buttons.poll(app);
+    if (power_key && g_system.now_ms() - power_key_at >= 50) {
+      power_key_at = g_system.now_ms();
+      if (g_power.take_power_key()) app.on_power_key();
+    }
     g_wifi.tick(app, g_system.now_ms());
     if (g_gestures) g_gestures->tick(g_system.now_ms());
     app.tick();

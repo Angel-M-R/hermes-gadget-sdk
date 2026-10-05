@@ -199,6 +199,8 @@ class SimulatorWindow:
         self.root.bind("<Up>", lambda e: self._scroll("up"))
         self.root.bind("<Down>", lambda e: self._scroll("down"))
         self.root.bind("<Control-s>", lambda e: self._screenshot())
+        if self.sim.board.power_key:
+            self.root.bind("<Control-p>", lambda e: self.sim.power_key())
         self.root.bind("<FocusOut>", lambda e: self.root.after_idle(self._release_if_unfocused))
         self.root.protocol("WM_DELETE_WINDOW", self._quit)
 

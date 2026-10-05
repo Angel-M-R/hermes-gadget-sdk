@@ -1065,6 +1065,144 @@ TEST("settings: title hold and menu swipe work without starting a recording") {
   CHECK(r.app.screen() == hg::Screen::Ready);
 }
 
+TEST("touch: holding the speaker button mutes and unmutes; a tap only says how") {
+  Rig r(Rig::touch_profile());
+  r.bring_online(true);
+  CHECK(r.app.model().speaker_button);
+  CHECK(r.app.speaker_button_hit(32, 54));
+  CHECK(!r.app.speaker_button_hit(32, 10));  // the title bar stays the settings handle
+  CHECK(!r.app.speaker_button_hit(200, 150));
+  CHECK_EQ(r.fake.volume, 70);
+  hg::TouchGestures touch(r.app);
+
+  touch.update(true, 32, 54, r.fake.clock);
+  CHECK(r.app.model().speaker_pressed);
+  r.advance(100);
+  touch.tick(r.fake.clock);
+  touch.update(false, 0, 0, r.fake.clock);
+  CHECK(!r.app.muted());
+  CHECK(!r.app.model().speaker_pressed);
+  CHECK_EQ(r.app.model().hint, std::string("Hold the speaker to mute"));
+
+  touch.update(true, 34, 50, r.fake.clock);
+  r.advance(450);
+  touch.tick(r.fake.clock);
+  CHECK(r.app.muted());
+  CHECK(r.app.model().muted);
+  CHECK_EQ(r.fake.volume, 0);
+  CHECK(!r.fake.mic_on);  // the hold never became TALK
+  touch.update(false, 0, 0, r.fake.clock);
+  CHECK(r.fake.last("audio.start") == nullptr);
+  CHECK_EQ(r.app.model().hint, std::string("Speaker off"));
+  CHECK_EQ(r.app.console("get mute"), std::string(R"(@value {"key":"mute","value":"1"})"));
+
+  hg::Hal hal = r.fake.hal();
+  hg::App again(hal, Rig::touch_profile());
+  again.begin();
+  CHECK(again.muted());
+
+  // The agent may change the volume; only the user unmutes.
+  r.server(R"({"type":"action","id":"v1","name":"speaker.volume","args":{"percent":40}})");
+  CHECK_EQ(r.fake.volume, 0);
+  CHECK_EQ(r.app.console("set mute 2"), std::string("@error mute must be 0 or 1"));
+  CHECK_EQ(r.app.console("set mute 0"), std::string("@ok mute"));
+  CHECK_EQ(r.fake.volume, 40);
+
+  // Sliding off the button leaves mute alone and doesn't talk.
+  touch.update(true, 32, 54, r.fake.clock);
+  touch.update(true, 32, 90, r.fake.clock);
+  r.advance(600);
+  touch.tick(r.fake.clock);
+  touch.update(false, 0, 0, r.fake.clock);
+  CHECK(!r.app.muted());
+  CHECK(!r.fake.mic_on);
+}
+
+TEST("touch: a long reply carries the speaker button in its header") {
+  Rig r(Rig::touch_profile());
+  r.bring_online(true);
+  r.server(R"({"type":"turn.start","turn":"a1"})");
+  r.server(R"({"type":"reply","turn":"a1","text":"A reply long enough to need the text layout, so it has a header band with the indicator on the left."})");
+  r.advance(200);
+  CHECK(!r.app.model().hero);
+  CHECK(!r.app.speaker_button_hit(32, 54));  // the indicator lives there now
+  CHECK(r.app.speaker_button_hit(300, 42));
+}
+
+TEST("power key: turns the screen off and on; replies keep it off, a question wakes it") {
+  Rig r(Rig::touch_profile());
+  r.fake.backlight = true;
+  r.bring_online(true);
+  CHECK_EQ(r.fake.brightness, 100);
+  r.app.on_power_key();
+  CHECK_EQ(r.fake.brightness, 0);
+  r.server(R"({"type":"turn.start","turn":"a1"})");
+  r.server(R"({"type":"reply","turn":"a1","text":"Still listening with the screen off."})");
+  r.advance(1000);
+  CHECK_EQ(r.fake.brightness, 0);
+  r.app.on_power_key();
+  CHECK_EQ(r.fake.brightness, 100);
+
+  // Off again: the next touch only wakes it, without talking.
+  r.app.on_power_key();
+  CHECK_EQ(r.fake.brightness, 0);
+  hg::TouchGestures touch(r.app);
+  touch.update(true, 200, 150, r.fake.clock);
+  r.advance(500);
+  touch.tick(r.fake.clock);
+  CHECK_EQ(r.fake.brightness, 100);
+  CHECK(!r.fake.mic_on);
+  touch.update(false, 0, 0, r.fake.clock);
+
+  r.app.on_power_key();
+  r.server(R"({"type":"prompt","id":"q1","text":"Continue?"})");
+  CHECK_EQ(r.fake.brightness, 100);
+  CHECK(r.app.screen() == hg::Screen::Prompt);
+}
+
+TEST("ui: the top bar shows the battery charge, or USB with no battery") {
+  struct Supply : hg::Power {
+    hg::PowerStatus status{true, 3900, 64, true, true};
+    std::optional<hg::PowerStatus> read() override { return status; }
+    bool power_off() override { return false; }
+  } supply;
+  Rig r;
+  r.hal.power = &supply;
+  r.bring_online(true);
+  r.advance(200);
+  CHECK_EQ(int(r.app.model().battery), 64);
+  CHECK(r.app.model().charging);
+  CHECK(!r.app.model().usb_power);
+  const std::vector<uint16_t> charging(r.fake.fb.begin(), r.fake.fb.begin() + 320 * 22);
+  supply.status = hg::PowerStatus{false, std::nullopt, std::nullopt, false, true};
+  r.advance(5000);
+  CHECK_EQ(int(r.app.model().battery), -1);
+  CHECK(r.app.model().usb_power);
+  CHECK(!std::equal(charging.begin(), charging.end(), r.fake.fb.begin()));  // the top bar was redrawn
+}
+
+TEST("ui: icons mark the keys beside the screen, and the microphone lights while recording") {
+  hg::DeviceProfile p = Rig::touch_profile();
+  p.talk_key = {'r', -60};
+  p.power_key = {'r', 60};
+  Rig r(p);
+  r.bring_online(true);
+  r.advance(200);
+  // 320x240 at scale 2: the 7x11 microphone sits 6 px from the right edge, centred 60 px above the middle.
+  auto mic_pixel = [&] { return r.fake.fb[static_cast<size_t>((120 - 60 - 11 + 2) * 320 + (320 - 6 - 14 + 6))]; };
+  const uint16_t dim = hg::rgb565(132, 146, 160), green = hg::rgb565(61, 214, 140);
+  CHECK_EQ(mic_pixel(), dim);
+  // The 9x8 power symbol, centred 60 px below the middle: its stem, one row down.
+  CHECK(r.fake.fb[static_cast<size_t>((120 + 60 - 8 + 2) * 320 + (320 - 6 - 18 + 8))] == dim);
+  hg::TouchGestures touch(r.app);
+  touch.update(true, 160, 150, r.fake.clock);
+  r.advance(200);
+  touch.tick(r.fake.clock);
+  r.advance(100);
+  CHECK(r.app.screen() == hg::Screen::Listening);
+  CHECK_EQ(mic_pixel(), green);
+}
+
 TEST("power: idle screen dims, sleeps and consumes the wake input without recording") {
   Rig r;
   r.fake.backlight = true;

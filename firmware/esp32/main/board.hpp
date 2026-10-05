@@ -99,6 +99,14 @@ struct ExpanderResetConfig {
   uint8_t idle = 0;     // their levels while the parts are held in reset
 };
 
+// A physical key beside the screen, marked by an icon (hg::DeviceProfile::KeyMark):
+// the edge it sits on ('l' or 'r'; 0 = no icon) and its offset in pixels from
+// the screen's vertical centre.
+struct KeyMarkConfig {
+  char edge = 0;
+  int16_t dy = 0;
+};
+
 struct ButtonConfig {
   int talk = -1, cancel = -1, up = -1, down = -1;  // active-low GPIOs, -1 = absent
 };
@@ -121,6 +129,9 @@ struct BoardConfig {
   ExpanderKeyConfig pwr_key;
   ExpanderResetConfig expander_resets;
   bool axp2101 = false;
+  // PWR reaches the ESP32 only through the AXP2101: a short press turns the screen off or on.
+  bool axp_power_key = false;
+  KeyMarkConfig talk_key, power_key;
   bool axp_audio_supply = false;
   bool cores3 = false;
   LatchPowerConfig latch_power;

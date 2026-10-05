@@ -2,6 +2,7 @@
 // screen is the main input:
 //
 //   hold the title     local settings after one second
+//   hold the speaker   mute or unmute after 0.4 s (a tap only says how)
 //   hold elsewhere     TALK, held for as long as the finger stays down
 //   quick tap          a TALK press and release (answers "yes" to a question)
 //   swipe down         a CANCEL press and release (discard, close, stop, "no")
@@ -20,6 +21,7 @@ class TouchGestures {
  public:
   struct Config {
     uint32_t hold_ms = 120;  // a still finger becomes TALK after this long
+    uint32_t speaker_hold_ms = 400;  // holding the speaker button this long toggles mute
     int slop_px = 18;        // movement allowed before a touch stops being a hold or tap
     int swipe_px = 60;       // downward travel that makes a swipe
     bool swipe_cancel = true;
@@ -38,7 +40,7 @@ class TouchGestures {
   void tick(uint32_t now_ms);
 
  private:
-  enum class State : uint8_t { Idle, Pending, Settings, Talk, Swipe, Ignored };
+  enum class State : uint8_t { Idle, Pending, Settings, Speaker, Talk, Swipe, Ignored };
   void press(Button b);
   void release(Button b);
 

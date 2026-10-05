@@ -36,7 +36,7 @@ constexpr uint32_t kOtaRestartMs = 1000;    // time for ota.done to leave before
 constexpr uint32_t kBackoffMs[] = {1000, 2000, 4000, 8000, 15000, 30000};
 constexpr size_t kBackoffSteps = sizeof(kBackoffMs) / sizeof(kBackoffMs[0]);
 
-const char* const kSettingKeys[] = {"name", "server", "token", "talk_mode", "volume", "brightness", "screen_timeout", "wifi_ssid", "wifi_pass"};
+const char* const kSettingKeys[] = {"name", "server", "token", "talk_mode", "volume", "brightness", "screen_timeout", "wifi_ssid", "wifi_pass", "mute"};
 
 bool is_secret(std::string_view key) { return key == "token" || key == "wifi_pass"; }
 
@@ -101,12 +101,13 @@ void App::load_settings() {
   talk_mode_ = setting("talk_mode", "hold") == "tap" ? TalkMode::Tap : TalkMode::Hold;
   int vol = std::atoi(setting("volume", "70").c_str());
   volume_ = static_cast<uint8_t>(std::max(0, std::min(100, vol)));
-  if (hal_.speaker) hal_.speaker->set_volume(volume_);
+  muted_ = setting("mute", "0") == "1";
+  apply_volume();
   brightness_ = static_cast<uint8_t>(std::max(5, std::min(100, std::atoi(setting("brightness", "100").c_str()))));
   if (hal_.display && hal_.display->info().has_backlight) hal_.display->set_backlight(brightness_);
   screen_timeout_ms_ = static_cast<uint32_t>(std::max(0, std::min(3600, std::atoi(setting("screen_timeout", "0").c_str())))) * 1000;
   activity_at_ = now();
-  display_dimmed_ = display_sleeping_ = false;
+  display_dimmed_ = display_sleeping_ = display_off_by_user_ = false;
 }
 
 void App::add_action(Action action) {
@@ -150,7 +151,7 @@ void App::begin() {
       }
       int p = static_cast<int>(std::max<int64_t>(0, std::min<int64_t>(100, args["percent"].as_int())));
       volume_ = static_cast<uint8_t>(p);
-      hal_.speaker->set_volume(volume_);
+      apply_volume();  // a muted speaker stays muted: only the user unmutes it
       if (hal_.storage) hal_.storage->set("volume", std::to_string(p));
       result.set("percent", p);
       return true;
@@ -431,7 +432,7 @@ void App::h_unpaired(const json::Value&) {
 bool App::can_talk() const { return phase_ == Phase::Online && paired_ && ota_ != Ota::Receiving; }
 
 void App::h_turn_start(const json::Value& m) {
-  wake_display();
+  wake_for_activity();
   active_turn_ = m["turn"].as_string();
   turn_done_ = false;
   reply_final_ = false;
@@ -475,7 +476,7 @@ void App::h_transcript(const json::Value& m) {
 }
 
 void App::h_reply_delta(const json::Value& m) {
-  wake_display();
+  wake_for_activity();
   if (mode_ == Mode::Listening) return;
   reply_ = m["text"].as_string();
   scroll_ = -1;
@@ -487,7 +488,7 @@ void App::h_reply_delta(const json::Value& m) {
 }
 
 void App::h_reply(const json::Value& m) {
-  wake_display();
+  wake_for_activity();
   last_turn_rx_ = now();
   const std::string& text = m["text"].as_string();
   if (m["interim"].as_bool()) {
@@ -506,7 +507,7 @@ void App::h_reply(const json::Value& m) {
 
 void App::h_audio_start(const json::Value& m) {
   close_wifi_setup();
-  wake_display();
+  wake_for_activity();
   if (settings_open()) close_settings();
   if (!hal_.speaker || mode_ == Mode::Listening) return;
   uint32_t rate = static_cast<uint32_t>(m["rate"].as_int(profile_.speaker_rate));
@@ -591,7 +592,7 @@ void App::on_transport_binary(const uint8_t* data, size_t len) {
 }
 
 void App::h_display(const json::Value& m) {
-  wake_display();
+  wake_for_activity();
   card_title_ = m["title"].as_string();
   card_body_ = m["body"].as_string();
   card_scroll_ = 0;
@@ -603,7 +604,7 @@ void App::h_display(const json::Value& m) {
 
 void App::h_image_start(const json::Value& m) {
   close_wifi_setup();
-  wake_display();
+  wake_for_activity();
   if (settings_open()) close_settings();
   if (!hal_.display || !ui_) return;
   const UiLayout& l = ui_->layout();
@@ -820,6 +821,27 @@ void App::on_button(Button button, bool pressed) {
       break;
   }
   update_model();
+}
+
+bool App::speaker_button_hit(int x, int y) const {
+  return ui_ && model_.speaker_button && ui_->speaker_hit(x, y);
+}
+
+void App::on_speaker_button(SpeakerTouch touch) {
+  speaker_pressed_ = touch == SpeakerTouch::Down;
+  if (touch == SpeakerTouch::Hold) {
+    muted_ = !muted_;
+    if (hal_.storage) hal_.storage->set("mute", muted_ ? "1" : "0");
+    apply_volume();
+    set_hint_flash(muted_ ? "Speaker off" : "Speaker on");
+  } else if (touch == SpeakerTouch::Tap) {
+    set_hint_flash(muted_ ? "Hold the speaker to unmute" : "Hold the speaker to mute");
+  }
+  update_model();
+}
+
+void App::apply_volume() {
+  if (hal_.speaker) hal_.speaker->set_volume(muted_ ? 0 : volume_);
 }
 
 void App::start_listening(bool hands_free) {
@@ -1347,6 +1369,22 @@ void App::update_model() {
   m.level = level_;
   m.speaking = speaking();
   m.color_test = false;
+  m.speaker_button = profile_.touch_screen && hal_.speaker;  // drawn on the conversation screens
+  m.muted = muted_;
+  m.speaker_pressed = speaker_pressed_;
+  m.talk_edge = profile_.talk_key.edge;
+  m.talk_dy = profile_.talk_key.dy;
+  m.power_edge = profile_.power_key.edge;
+  m.power_dy = profile_.power_key.dy;
+  m.battery = -1;
+  m.charging = m.usb_power = false;
+  if (power_status_) {
+    const PowerStatus& p = *power_status_;
+    if (p.battery_present.value_or(false) && p.battery_percent)
+      m.battery = static_cast<int8_t>(std::min<int>(100, *p.battery_percent));
+    m.charging = m.battery >= 0 && p.charging.value_or(false);
+    m.usb_power = !p.battery_present.value_or(true) && p.external_power.value_or(false);
+  }
 
   switch (phase_) {
     case Phase::NoNetwork:
@@ -1617,6 +1655,7 @@ std::string App::console(std::string_view raw) {
     if (key == "screen_timeout" && !value.empty() &&
         (value.size() > 4 || value.find_first_not_of("0123456789") != std::string::npos || std::atoi(value.c_str()) > 3600))
       return "@error screen_timeout must be 0..3600 seconds";
+    if (key == "mute" && !value.empty() && value != "0" && value != "1") return "@error mute must be 0 or 1";
     if (!hal_.storage) return "@error no storage";
     if (value.empty()) hal_.storage->erase(key);
     else hal_.storage->set(key, value);

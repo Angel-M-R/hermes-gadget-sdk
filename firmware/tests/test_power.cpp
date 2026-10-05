@@ -80,6 +80,35 @@ TEST("AXP2101: audio supply enables ALDO1 at 3.3 V and preserves other rails") {
   CHECK(!power.enable_aldo1_3v3());
 }
 
+TEST("AXP2101: the power key's short press is enabled without touching rails and reported once") {
+  std::array<uint8_t, 256> regs{};
+  regs[0x41] = 0x40;  // another interrupt already enabled
+  regs[0x49] = 0x08;  // a press from before boot
+  std::vector<std::pair<uint8_t, uint8_t>> writes;
+  hg::Axp2101 power(
+      [&](uint8_t reg, uint8_t* out, size_t n) {
+        for (size_t i = 0; i < n; ++i) out[i] = regs[reg + i];
+        return true;
+      },
+      [&](uint8_t reg, uint8_t value) {
+        writes.emplace_back(reg, value);
+        if (reg == 0x49) regs[reg] = static_cast<uint8_t>(regs[reg] & ~value);  // write 1 to clear
+        else regs[reg] = value;
+        return true;
+      });
+  CHECK(power.enable_power_key());
+  CHECK_EQ(writes.size(), size_t(2));
+  CHECK_EQ(writes[0].first, uint8_t(0x41));
+  CHECK_EQ(writes[0].second, uint8_t(0x48));
+  CHECK_EQ(writes[1].first, uint8_t(0x49));
+  CHECK(!power.take_short_press());  // the stale press was cleared
+  regs[0x49] = 0x0c;                 // short and long press latched together
+  CHECK(power.take_short_press());
+  CHECK_EQ(regs[0x49], uint8_t(0x04));  // only the short press is cleared
+  CHECK(!power.take_short_press());
+  for (const auto& w : writes) CHECK(w.first == 0x41 || w.first == 0x49);
+}
+
 TEST("CoreS3: peripheral power preserves charger and external output configuration") {
   std::array<uint8_t, 256> pmic{}, io{};
   pmic.fill(0x60);
