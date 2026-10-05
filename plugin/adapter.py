@@ -634,6 +634,7 @@ class GadgetAdapter(BasePlatformAdapter, HubDelegate):
                 found = [str(path) for path in (data.get("file_paths") or [data.get("file_path")])
                          if path and Path(path).exists()]
                 return found, requested
+            logger.warning("[%s] %s speech failed: %s", self.name, provider, data.get("error") or "no audio")
         except Exception as exc:  # a missing engine or model must not lose the reply
             logger.warning("[%s] %s speech failed: %s", self.name, provider, exc)
         return [], None

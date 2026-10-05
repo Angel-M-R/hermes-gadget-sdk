@@ -41,7 +41,7 @@ platforms:
       #   hg-0123456789abcdef: piper
 ```
 
-Every device speaks with the profile's text-to-speech provider unless `tts_providers` names another for its device id. The voice then comes from that provider's settings in the same profile, for example `tts.piper.voice: es_ES-davefx-medium`, and the provider must be installed on the Hermes host. If it fails, the device falls back to the profile's voice. This applies to replies Hermes speaks as a whole file. When the profile's provider streams speech to the device instead, every device keeps that voice.
+Every device speaks with the profile's text-to-speech provider unless `tts_providers` names another for its device id. The voice then comes from that provider's settings in the same profile, for example `tts.piper.voice: es_ES-davefx-medium`. The provider must be installed in the environment the gateway runs in: for Piper, run `hermes tools post-setup piper` on the Hermes host and restart the gateway. If it fails, the device falls back to the profile's voice. It applies to replies to voice messages, which is how a gadget is used. Replies to typed text go through the gateway runner's voice reply instead and keep the profile's voice, as do replies Hermes streams to the device.
 
 Secrets go in `~/.hermes/.env`, following Hermes's rule that `.env` is only for secrets:
 

@@ -12,8 +12,10 @@ description: >
   actions (LEDs, relays, displays) through the gadget tools.
 author: Hermes Gadget SDK contributors
 license: MIT
+# Hermes's own edge-tts extra pins one exact version; a range here that excludes it
+# makes Hermes refuse to enable the plugin, so take whichever it has.
 python_dependencies:
-  - "edge-tts>=7.2.8,<8"
+  - "edge-tts"
 tags: [gateway, hardware, esp32, voice, iot]
 provides_tools:
   - gadget_devices
