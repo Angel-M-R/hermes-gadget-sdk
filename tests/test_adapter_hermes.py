@@ -193,7 +193,7 @@ def test_speaking_devices_default_to_spoken_replies(gadget, make_sim):
     assert a._should_auto_tts_for_chat(talker.status()["device_id"]) is False
 
 
-def test_a_device_can_speak_with_its_own_tts_provider(gadget, make_sim, monkeypatch):
+def test_a_device_can_speak_with_its_own_tts_provider(gadget, make_sim, monkeypatch, caplog):
     import gateway.platforms.base as base
     import tools.tts_tool as tts
 
@@ -226,8 +226,10 @@ def test_a_device_can_speak_with_its_own_tts_provider(gadget, make_sim, monkeypa
     assert calls[-1] is None  # the profile's own provider
     broken.add("piper")
     calls.clear()
-    paths, _ = gadget.run(turn(knight))
+    with caplog.at_level("WARNING"):
+        paths, _ = gadget.run(turn(knight))
     assert paths and calls == ["piper", None]  # a failing provider falls back to the profile's voice
+    assert "piper speech failed: piper-tts not installed" in caplog.text  # and says why
 
 
 def test_whole_file_tts_is_decoded_resampled_and_played(gadget, make_sim, tmp_path):
