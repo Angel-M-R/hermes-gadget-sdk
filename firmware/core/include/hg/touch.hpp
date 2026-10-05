@@ -22,12 +22,12 @@ class TouchGestures {
   struct Config {
     uint32_t hold_ms = 120;  // a still finger becomes TALK after this long
     uint32_t speaker_hold_ms = 400;  // holding the speaker button this long toggles mute
-    // tick() runs on the app's clock, ahead of a lift still on its way from the
-    // controller: this much extra hold keeps a tap near speaker_hold_ms a tap.
-    uint32_t sample_lag_ms = 50;
     int slop_px = 18;        // movement allowed before a touch stops being a hold or tap
     int swipe_px = 60;       // downward travel that makes a swipe
     bool swipe_cancel = true;
+    // tick() runs on the app's clock, ahead of a lift still on its way from the
+    // controller: this much extra hold keeps a tap near speaker_hold_ms a tap.
+    uint32_t sample_lag_ms = 50;
   };
 
   explicit TouchGestures(App& app) : app_(app) {}

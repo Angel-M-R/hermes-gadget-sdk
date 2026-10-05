@@ -43,12 +43,6 @@ struct DeviceProfile {
   bool has_scroll_buttons = false;
   std::string talk_label = "TALK";
   std::string cancel_label = "CANCEL";
-  // A TALK key that lifts for a moment under the thumb holding it (the
-  // AMOLED-1.8's small BOOT key). While a held recording runs, a release
-  // counts only once TALK has stayed up this long; a press before then
-  // continues the same recording. Applies to every TALK release, holding the
-  // screen included. 0 ends the recording at the release.
-  uint16_t talk_release_grace_ms = 0;
   // The screen stands in for the buttons (hold to talk, tap to answer yes,
   // swipe to cancel); on-screen hints are worded for touch.
   bool touch_screen = false;
@@ -64,6 +58,12 @@ struct DeviceProfile {
   };
   KeyMark talk_key;   // a microphone, lit while recording
   KeyMark power_key;  // a power symbol: the key that turns the screen off (App::on_power_key)
+  // A TALK key that lifts for a moment under the thumb holding it (the
+  // AMOLED-1.8's small BOOT key). While a held recording runs, a release
+  // counts only once TALK has stayed up this long; a press before then
+  // continues the same recording. Applies to every TALK release, holding the
+  // screen included. 0 ends the recording at the release.
+  uint16_t talk_release_grace_ms = 0;
 };
 
 // A device-side capability the agent may invoke. `params` is a JSON-schema

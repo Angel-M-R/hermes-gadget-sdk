@@ -1252,6 +1252,7 @@ TEST("touch: a round screen keeps its speaker button inside the glass") {
   CHECK(r.app.model().speaker_button);
   CHECK(r.app.speaker_button_hit(112, 134));  // the mascot screen's button, top left of the square
   const uint16_t bg = r.fake.fb[static_cast<size_t>(233 * 466)];
+  CHECK(r.fake.fb[static_cast<size_t>(134 * 466 + 112)] != bg);  // and it was drawn there
   int stray = 0;
   for (int y = 0; y < 466; ++y)
     for (int x = 0; x < 466; ++x) {
