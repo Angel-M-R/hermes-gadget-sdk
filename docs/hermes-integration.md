@@ -37,7 +37,11 @@ platforms:
       # max_utterance_s: 60
       # tls_cert: /path/cert.pem   # serve wss://
       # tls_key: /path/key.pem
+      # tts_providers:              # spoken replies with another provider for some devices
+      #   hg-0123456789abcdef: piper
 ```
+
+Every device speaks with the profile's text-to-speech provider unless `tts_providers` names another for its device id. The voice then comes from that provider's settings in the same profile, for example `tts.piper.voice: es_ES-davefx-medium`, and the provider must be installed on the Hermes host. If it fails, the device falls back to the profile's voice. This applies to replies Hermes speaks as a whole file. When the profile's provider streams speech to the device instead, every device keeps that voice.
 
 Secrets go in `~/.hermes/.env`, following Hermes's rule that `.env` is only for secrets:
 

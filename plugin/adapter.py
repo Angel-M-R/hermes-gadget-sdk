@@ -20,6 +20,8 @@ config.yaml::
           speak_replies: true    # auto-TTS for devices with a speaker
           auto_home: true        # first approved device becomes the gadget home channel
           unauthorized_dm_behavior: pair
+          # tts_providers:       # a device speaking with another provider than the profile's
+          #   hg-0123456789abcdef: piper
 
 Secrets (``~/.hermes/.env``): ``GADGET_ACCESS_TOKEN`` (optional shared token).
 """
@@ -27,6 +29,7 @@ Secrets (``~/.hermes/.env``): ``GADGET_ACCESS_TOKEN`` (optional shared token).
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import json
 import logging
 import re
@@ -34,6 +37,7 @@ import ssl
 import time
 import uuid
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from agent.i18n import t
@@ -54,6 +58,11 @@ from . import audio as gaudio
 from . import imaging, ota, runtime, textfmt
 from .hub import DeviceHub, DeviceSession, HubDelegate
 from .store import DeviceStore
+
+# The device a reply is about to be spoken to. Hermes decides to voice a reply
+# (_wants_auto_tts) and then synthesizes it (_synthesize_auto_tts) in the same
+# task, so the first can tell the second which device it is for.
+_speaking_to: contextvars.ContextVar[str] = contextvars.ContextVar("gadget_speaking_to", default="")
 
 logger = logging.getLogger(__name__)
 
@@ -146,6 +155,10 @@ class GadgetAdapter(BasePlatformAdapter, HubDelegate):
         self._heartbeat_s = int(extra.get("heartbeat_s") or 20)
         self._max_utterance_s = float(extra.get("max_utterance_s") or 60)
         self._speak_replies = _flag(extra.get("speak_replies"), True)
+        # Device id -> text-to-speech provider for that device's spoken replies; the
+        # provider's voice comes from the profile's tts.<provider> settings.
+        self._tts_providers = {str(k): str(v).strip().lower()
+                               for k, v in (extra.get("tts_providers") or {}).items() if str(v).strip()}
         self._auto_home = _flag(extra.get("auto_home"), True)
         self._tls_cert = extra.get("tls_cert")
         self._tls_key = extra.get("tls_key")
@@ -588,6 +601,42 @@ class GadgetAdapter(BasePlatformAdapter, HubDelegate):
         if session is not None and session.has_speaker and self._speak_replies:
             return True
         return super()._should_auto_tts_for_chat(chat_id)
+
+    def _wants_auto_tts(self, event, *args, **kwargs) -> bool:
+        wants = super()._wants_auto_tts(event, *args, **kwargs)
+        _speaking_to.set(str(event.source.chat_id) if wants else "")
+        return wants
+
+    async def _synthesize_auto_tts(self, text_content: str) -> Tuple[List[str], Optional[str]]:
+        # A device with its own provider speaks with it; the profile's voice is the fallback.
+        provider = self._tts_providers.get(_speaking_to.get())
+        if provider:
+            paths, requested = await self._synthesize_with(provider, text_content)
+            if paths:
+                return paths, requested
+            logger.warning("[%s] %s speech failed for %s; using the profile's voice", self.name, provider,
+                           _speaking_to.get())
+        return await super()._synthesize_auto_tts(text_content)
+
+    async def _synthesize_with(self, provider: str, text_content: str) -> Tuple[List[str], Optional[str]]:
+        """Hermes's auto-TTS with the provider named, as the base class does it otherwise."""
+        try:
+            from gateway.platforms.base import build_auto_tts_output_path
+            from tools.tts_tool import text_to_speech_tool
+
+            speech_text = self.prepare_tts_text(text_content)
+            if not speech_text:
+                return [], None
+            requested = build_auto_tts_output_path(self.platform)
+            data = json.loads(await asyncio.to_thread(
+                text_to_speech_tool, text=speech_text, output_path=requested, provider=provider))
+            if data.get("success", True):
+                found = [str(path) for path in (data.get("file_paths") or [data.get("file_path")])
+                         if path and Path(path).exists()]
+                return found, requested
+        except Exception as exc:  # a missing engine or model must not lose the reply
+            logger.warning("[%s] %s speech failed: %s", self.name, provider, exc)
+        return [], None
 
     async def _play_file(self, chat_id: str, path: str) -> SendResult:
         session = self._session(chat_id)

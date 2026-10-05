@@ -193,6 +193,43 @@ def test_speaking_devices_default_to_spoken_replies(gadget, make_sim):
     assert a._should_auto_tts_for_chat(talker.status()["device_id"]) is False
 
 
+def test_a_device_can_speak_with_its_own_tts_provider(gadget, make_sim, monkeypatch):
+    import gateway.platforms.base as base
+    import tools.tts_tool as tts
+
+    knight = _paired_sim(gadget, make_sim, state="knight").status()["device_id"]
+    plain = _paired_sim(gadget, make_sim, state="plain").status()["device_id"]
+    a = gadget.adapter
+    a._tts_providers = {knight: "piper"}
+    calls, broken = [], set()
+
+    def fake_tts(text, output_path=None, provider=None, **kw):
+        calls.append(provider)
+        if provider in broken:
+            return json.dumps({"success": False, "error": "piper-tts not installed"})
+        with open(output_path, "wb") as f:
+            f.write(b"RIFF")
+        return json.dumps({"success": True, "file_path": output_path})
+
+    monkeypatch.setattr(tts, "text_to_speech_tool", fake_tts)
+    monkeypatch.setattr(tts, "check_tts_requirements", lambda: True)
+    monkeypatch.setattr(base.BasePlatformAdapter, "_wants_auto_tts", lambda self, event, *args, **kw: True)
+
+    async def turn(device_id):
+        # Hermes decides to speak, then synthesizes, in the same task.
+        a._wants_auto_tts(types.SimpleNamespace(source=types.SimpleNamespace(chat_id=device_id)), "s", None, "Hola", [])
+        return await a._synthesize_auto_tts("Hola")
+
+    paths, _ = gadget.run(turn(knight))
+    assert paths and calls == ["piper"]
+    gadget.run(turn(plain))
+    assert calls[-1] is None  # the profile's own provider
+    broken.add("piper")
+    calls.clear()
+    paths, _ = gadget.run(turn(knight))
+    assert paths and calls == ["piper", None]  # a failing provider falls back to the profile's voice
+
+
 def test_whole_file_tts_is_decoded_resampled_and_played(gadget, make_sim, tmp_path):
     from hermes_gadget_plugin import audio
 
