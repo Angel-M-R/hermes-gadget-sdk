@@ -77,8 +77,9 @@ void I2sMic::task(void* arg) {
     }
     size_t got = 0;
     // ESP_ERR_TIMEOUT only means fewer bytes than requested were ready; `got`
-    // still holds what was read, so drop only genuinely empty reads.
-    i2s_channel_read(self->rx_, raw, sizeof(raw), &got, pdMS_TO_TICKS(100));
+    // still holds what was read, so drop only genuinely empty reads. The
+    // timeout is in milliseconds, not ticks.
+    i2s_channel_read(self->rx_, raw, sizeof(raw), &got, 100);
     if (got == 0) continue;
     size_t n = got / sizeof(int32_t);
     for (size_t i = 0; i < n; ++i) {
@@ -177,15 +178,14 @@ void I2sSpeaker::task(void* arg) {
     size_t n = got / sizeof(int16_t);
     int vol = self->volume_.load();
     for (size_t i = 0; i < n; ++i) chunk[i] = static_cast<int16_t>(chunk[i] * vol / 100);
-    // A write commonly completes one DMA buffer per call (ESP_ERR_TIMEOUT with a
-    // partial count), so keep feeding the remainder; dropping it sounds like
-    // crackle.
+    // A write can stop partway (ESP_ERR_TIMEOUT with a partial count), so keep
+    // feeding the remainder; dropping it sounds like crackle. The timeout is in
+    // milliseconds, not ticks.
     const size_t total = n * sizeof(int16_t);
     size_t offset = 0;
     while (offset < total) {
       size_t written = 0;
-      i2s_channel_write(self->tx_, reinterpret_cast<uint8_t*>(chunk) + offset, total - offset, &written,
-                        pdMS_TO_TICKS(200));
+      i2s_channel_write(self->tx_, reinterpret_cast<uint8_t*>(chunk) + offset, total - offset, &written, 200);
       if (written == 0) break;
       offset += written;
     }
