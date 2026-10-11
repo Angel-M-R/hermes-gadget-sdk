@@ -10,6 +10,7 @@
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/task.h"
+#include "speaker_queue.hpp"
 
 namespace hgp {
 namespace {
@@ -76,11 +77,7 @@ void I2sMic::task(void* arg) {
       continue;
     }
     size_t got = 0;
-    // ESP_ERR_TIMEOUT only means fewer bytes than requested were ready; `got`
-    // still holds what was read, so drop only genuinely empty reads. The
-    // timeout is in milliseconds, not ticks.
-    i2s_channel_read(self->rx_, raw, sizeof(raw), &got, 100);
-    if (got == 0) continue;
+    if (i2s_channel_read(self->rx_, raw, sizeof(raw), &got, pdMS_TO_TICKS(100)) != ESP_OK || got == 0) continue;
     size_t n = got / sizeof(int32_t);
     for (size_t i = 0; i < n; ++i) {
       // 24-bit sample left-aligned in 32 bits; keep the top 16 with a little gain.
@@ -122,7 +119,9 @@ bool I2sSpeaker::begin(uint32_t sample_rate) {
 void I2sSpeaker::write(const int16_t* samples, size_t count) {
   if (!open_) return;
   size_t bytes = count * sizeof(int16_t);
-  size_t sent = xStreamBufferSend(buffer_, samples, bytes, 0);
+  // The app task is the only writer, so the room can only grow before the send.
+  size_t fit = hg::whole_sample_bytes(bytes, xStreamBufferSpacesAvailable(buffer_));
+  size_t sent = xStreamBufferSend(buffer_, samples, fit, 0);
   if (sent < bytes) ESP_LOGW(TAG, "playback buffer full, dropped %u bytes", static_cast<unsigned>(bytes - sent));
 }
 
@@ -178,22 +177,8 @@ void I2sSpeaker::task(void* arg) {
     size_t n = got / sizeof(int16_t);
     int vol = self->volume_.load();
     for (size_t i = 0; i < n; ++i) chunk[i] = static_cast<int16_t>(chunk[i] * vol / 100);
-    // A write can stop partway (ESP_ERR_TIMEOUT with a partial count), so keep
-    // feeding the remainder; dropping it sounds like crackle. The timeout is in
-    // milliseconds, not ticks.
-    const size_t total = n * sizeof(int16_t);
-    size_t offset = 0;
-    while (offset < total && !self->flush_.load()) {  // an abort drops the rest at once
-      size_t written = 0;
-      const esp_err_t err =
-          i2s_channel_write(self->tx_, reinterpret_cast<uint8_t*>(chunk) + offset, total - offset, &written, 200);
-      if (written == 0) {
-        ESP_LOGW(TAG, "speaker stalled (%s), dropped %u bytes", esp_err_to_name(err),
-                 static_cast<unsigned>(total - offset));
-        break;
-      }
-      offset += written;
-    }
+    size_t written = 0;
+    i2s_channel_write(self->tx_, chunk, n * sizeof(int16_t), &written, pdMS_TO_TICKS(200));
   }
 }
 

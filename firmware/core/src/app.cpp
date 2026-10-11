@@ -36,7 +36,7 @@ constexpr uint32_t kOtaRestartMs = 1000;    // time for ota.done to leave before
 constexpr uint32_t kBackoffMs[] = {1000, 2000, 4000, 8000, 15000, 30000};
 constexpr size_t kBackoffSteps = sizeof(kBackoffMs) / sizeof(kBackoffMs[0]);
 
-const char* const kSettingKeys[] = {"name", "server", "token", "talk_mode", "volume", "brightness", "screen_timeout", "wifi_ssid", "wifi_pass", "mute",
+const char* const kSettingKeys[] = {"name", "server", "token", "talk_mode", "volume", "brightness", "screen_timeout", "battery_display", "wifi_ssid", "wifi_pass", "mute",
                                   "end_silence_ms", "recording_cues", "text_size", "language"};
 
 bool is_secret(std::string_view key) { return key == "token" || key == "wifi_pass"; }
@@ -117,6 +117,10 @@ void App::load_settings() {
   if (was_dark) hal_.display->set_sleep(false);
   if (hal_.display && hal_.display->info().has_backlight) hal_.display->set_backlight(brightness_);
   screen_timeout_ms_ = static_cast<uint32_t>(std::max(0, std::min(3600, std::atoi(setting("screen_timeout", "0").c_str())))) * 1000;
+  const std::string indicator = setting("battery_display", "off");
+  battery_display_ = indicator == "icon" ? BatteryIndicator::Icon
+                       : indicator == "percentage" ? BatteryIndicator::Percentage
+                       : indicator == "both" ? BatteryIndicator::Both : BatteryIndicator::Off;
   activity_at_ = now();
   display_dimmed_ = display_sleeping_ = display_off_by_user_ = false;
   if (was_dark && ui_) ui_->invalidate();
@@ -138,7 +142,8 @@ void App::begin() {
   if (stored.empty() || !crypto::base64_decode(stored, key_) || key_.size() != 32) {
     key_.assign(32, 0);
     hal_.system->random_bytes(key_.data(), key_.size());
-    if (hal_.storage) hal_.storage->set("device_key", crypto::base64_encode(key_.data(), key_.size()));
+    if (hal_.storage && !hal_.storage->set("device_key", crypto::base64_encode(key_.data(), key_.size())))
+      log(LogLevel::Error, "could not save the device key: this identity lasts until the next restart");
     log(LogLevel::Info, "generated a new device key");
   }
   device_id_ = proto::device_id_for_key(key_.data(), key_.size());
@@ -164,7 +169,7 @@ void App::begin() {
       int p = static_cast<int>(std::max<int64_t>(0, std::min<int64_t>(100, args["percent"].as_int())));
       volume_ = static_cast<uint8_t>(p);
       apply_volume();  // a muted speaker stays muted: only the user unmutes it
-      if (hal_.storage) hal_.storage->set("volume", std::to_string(p));
+      if (hal_.storage && !hal_.storage->set("volume", std::to_string(p))) log(LogLevel::Warn, "could not save volume");
       result.set("percent", p);
       return true;
     };
@@ -189,7 +194,7 @@ void App::begin() {
       int p = static_cast<int>(std::max<int64_t>(5, std::min<int64_t>(100, args["percent"].as_int())));
       hal_.display->set_backlight(static_cast<uint8_t>(p));
       brightness_ = static_cast<uint8_t>(p);
-      if (hal_.storage) hal_.storage->set("brightness", std::to_string(p));
+      if (hal_.storage && !hal_.storage->set("brightness", std::to_string(p))) log(LogLevel::Warn, "could not save brightness");
       result.set("percent", p);
       return true;
     };
@@ -864,7 +869,7 @@ void App::on_speaker_button(SpeakerTouch touch) {
   speaker_pressed_ = touch == SpeakerTouch::Down || touch == SpeakerTouch::Hold;
   if (touch == SpeakerTouch::Hold) {
     muted_ = !muted_;
-    if (hal_.storage) hal_.storage->set("mute", muted_ ? "1" : "0");
+    if (hal_.storage && !hal_.storage->set("mute", muted_ ? "1" : "0")) log(LogLevel::Warn, "could not save mute");
     apply_volume();
     set_hint_flash(muted_ ? tr("Speaker off") : tr("Speaker on"));
   } else if (touch == SpeakerTouch::Tap) {
@@ -1464,9 +1469,9 @@ void App::update_model() {
   m.code.clear();
   m.detail.clear();
   m.body.clear();
-  m.qr.clear();
   m.yes.clear();
   m.no.clear();
+  m.qr = nullptr;
   m.hero = false;
   m.caption_lines = 1;
   m.scroll = scroll_;
@@ -1484,14 +1489,19 @@ void App::update_model() {
   m.talk_dy = profile_.talk_key.dy;
   m.power_edge = profile_.power_key.edge;
   m.power_dy = profile_.power_key.dy;
+  m.settings_hold = settings_hold_live();
   m.battery = -1;
-  m.charging = m.usb_power = false;
-  if (power_status_) {
-    const PowerStatus& p = *power_status_;
-    if (p.battery_present.value_or(false) && p.battery_percent)
-      m.battery = static_cast<int8_t>(std::min<int>(100, *p.battery_percent));
-    m.charging = m.battery >= 0 && p.charging.value_or(false);
-    m.usb_power = !p.battery_present.value_or(true) && p.external_power.value_or(false);
+  m.battery_charging = m.battery_low = false;
+  m.battery_icon = battery_display_ != BatteryIndicator::Percentage;
+  m.battery_text = battery_display_ != BatteryIndicator::Icon;
+  m.usb_power = false;
+  if (power_status_) m.usb_power = battery_display_ != BatteryIndicator::Off &&
+      power_status_->battery_present == false && power_status_->external_power == true;
+  if (battery_display_ != BatteryIndicator::Off && power_status_ && power_status_->battery_percent && power_status_->battery_present != false) {
+    const auto& p = *power_status_;
+    m.battery = static_cast<int8_t>(std::min<int>(*p.battery_percent, 100));
+    m.battery_charging = p.charging == true;
+    m.battery_low = *p.battery_percent <= 10 && p.external_power == false;
   }
 
   switch (phase_) {
@@ -1507,7 +1517,7 @@ void App::update_model() {
     m.headline = tr("Wi-Fi setup");
     m.detail = tr("Connect your phone");
     m.body = wifi_setup_text_;
-    m.qr = wifi_setup_code_;
+    m.qr = wifi_setup_qr_.ok() ? &wifi_setup_qr_ : nullptr;
     m.scroll = 0;
     m.hint = profile_.touch_screen ? tr("Swipe down to close") : cancel + tr(" to close");
     if (ui_) ui_->render(m);
@@ -1788,9 +1798,12 @@ std::string App::console(std::string_view raw) {
       return "@error text_size must be normal or large";
     if (key == "language" && !value.empty() && value != "en" && value != "es")
       return "@error language must be en or es";
+    if (key == "battery_display" && !value.empty() && value != "icon" && value != "percentage" && value != "both" &&
+        value != "off")
+      return "@error battery_display must be icon, percentage, both or off";
     if (!hal_.storage) return "@error no storage";
     if (value.empty()) hal_.storage->erase(key);
-    else hal_.storage->set(key, value);
+    else if (!hal_.storage->set(key, value)) return "@error could not save " + key;
     load_settings();
     if (key == "server" || key == "token") {
       // Reconnect with the new endpoint or credentials.

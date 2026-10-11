@@ -1,6 +1,5 @@
-// QSPI AMOLED panel with a CO5300 controller (the round 466x466 1.75" and the
-// rectangular 368x448 1.8" modules), driven directly through esp_lcd panel IO
-// in quad mode.
+// QSPI AMOLED panel with a CO5300 controller (e.g. the round 466x466 1.75"
+// modules), driven directly through esp_lcd panel IO in quad mode.
 //
 // Framing on the QSPI link: commands go out as (0x02 << 24) | (cmd << 8) with
 // their parameters; pixels as (0x32 << 24) | (RAMWR << 8). The controller only
@@ -9,7 +8,6 @@
 
 #include <algorithm>
 #include <cstring>
-#include <iterator>
 
 #include "driver/gpio.h"
 #include "driver/spi_master.h"
@@ -38,7 +36,7 @@ struct InitCommand {
 // Panel bring-up for CO5300 1.75" modules: vendor page settings, RGB565,
 // tearing line on, full brightness, the 466x466 window (column offset 6),
 // then sleep out and display on.
-constexpr InitCommand kInit175[] = {
+constexpr InitCommand kInit466[] = {
     {0x36, {0x00}, 1, 0},  // memory access control: no rotation
     {0x3A, {0x55}, 1, 0},  // 16 bits per pixel
     {0xFE, {0x20}, 1, 0},
@@ -57,21 +55,22 @@ constexpr InitCommand kInit175[] = {
     {0x29, {}, 0, 0},    // display on
 };
 
-// The 1.8" panel, from Waveshare's board support package for the
-// ESP32-S3-Touch-AMOLED-1.8: no vendor page settings, the 368x448 window
-// (column offset 16), then sleep out and display on.
-constexpr InitCommand kInit18[] = {
-    {0x36, {0x00}, 1, 0},  // memory access control: no rotation
-    {0x3A, {0x55}, 1, 0},  // 16 bits per pixel
+// Panel bring-up for the rectangular 368x448 1.8" module (V2: CO5300 + CST820),
+// following Waveshare's own board example: no MADCTL write and no page-2
+// registers, only the vendor page, RGB565, tearing, brightness and the window
+// (column offset 16 is applied per flush through gap_x). The window set here is
+// the full 368x448 glass; every flush rewrites it.
+constexpr InitCommand kInit368[] = {
     {0xFE, {0x00}, 1, 0},
     {0xC4, {0x80}, 1, 0},
+    {0x3A, {0x55}, 1, 0},  // 16 bits per pixel
     {0x35, {0x00}, 1, 0},  // tearing effect line on
     {0x53, {0x20}, 1, 0},  // brightness control on
     {0x51, {0xFF}, 1, 0},  // brightness
     {0x63, {0xFF}, 1, 0},
-    {0x2A, {0x00, 0x10, 0x01, 0x7F}, 4, 0},
+    {0x2A, {0x00, 0x00, 0x01, 0x6F}, 4, 0},
     {0x2B, {0x00, 0x00, 0x01, 0xBF}, 4, 0},
-    {0x11, {}, 0, 120},  // sleep out
+    {0x11, {}, 0, 100},  // sleep out
     {0x29, {}, 0, 0},    // display on
 };
 
@@ -80,7 +79,8 @@ constexpr InitCommand kInit18[] = {
 bool AmoledDisplay::on_trans_done(esp_lcd_panel_io_handle_t, esp_lcd_panel_io_event_data_t*, void* ctx) {
   BaseType_t woken = pdFALSE;
   xSemaphoreGiveFromISR(static_cast<AmoledDisplay*>(ctx)->done_, &woken);
-  return woken == pdTRUE;
+  if (woken) portYIELD_FROM_ISR();  // the SPI panel IO ignores this callback's return value
+  return false;
 }
 
 void AmoledDisplay::command(uint8_t cmd, const uint8_t* data, size_t len) {
@@ -111,7 +111,7 @@ bool AmoledDisplay::begin(const AmoledConfig& cfg) {
   bus.data7_io_num = -1;
   bus.max_transfer_sz = cfg.width * kBounceRows * 2 + 16;
   bus.flags = SPICOMMON_BUSFLAG_QUAD;
-  ESP_ERROR_CHECK(spi_bus_initialize(kHost, &bus, SPI_DMA_CH_AUTO));
+  if (!esp_ok(spi_bus_initialize(kHost, &bus, SPI_DMA_CH_AUTO), TAG, "spi_bus_initialize")) return false;
 
   esp_lcd_panel_io_spi_config_t io_cfg = {};
   io_cfg.cs_gpio_num = static_cast<gpio_num_t>(cfg.cs);
@@ -124,7 +124,7 @@ bool AmoledDisplay::begin(const AmoledConfig& cfg) {
   io_cfg.flags.quad_mode = 1;
   io_cfg.on_color_trans_done = &AmoledDisplay::on_trans_done;
   io_cfg.user_ctx = this;
-  ESP_ERROR_CHECK(esp_lcd_new_panel_io_spi(static_cast<esp_lcd_spi_bus_handle_t>(kHost), &io_cfg, &io_));
+  if (!esp_ok(esp_lcd_new_panel_io_spi(static_cast<esp_lcd_spi_bus_handle_t>(kHost), &io_cfg, &io_), TAG, "esp_lcd_new_panel_io_spi")) return false;
 
   if (cfg.rst >= 0) {
     gpio_config_t rst = {};
@@ -136,13 +136,34 @@ bool AmoledDisplay::begin(const AmoledConfig& cfg) {
     gpio_set_level(static_cast<gpio_num_t>(cfg.rst), 1);
     vTaskDelay(pdMS_TO_TICKS(150));
   }
-  const bool rect18 = cfg.panel == AmoledPanel::Rect18;
-  const InitCommand* init = rect18 ? kInit18 : kInit175;
-  const size_t count = rect18 ? std::size(kInit18) : std::size(kInit175);
-  for (size_t i = 0; i < count; ++i) {
+  const InitCommand* init = kInit466;
+  size_t init_len = sizeof(kInit466) / sizeof(kInit466[0]);
+  if (cfg.panel == AmoledPanel::Co5300_368) {
+    init = kInit368;
+    init_len = sizeof(kInit368) / sizeof(kInit368[0]);
+  }
+  for (size_t i = 0; i < init_len; ++i) {
     command(init[i].cmd, init[i].data, init[i].len);
     if (init[i].delay_ms) vTaskDelay(pdMS_TO_TICKS(init[i].delay_ms));
   }
+  // Each band's DMA transfer must finish before the bounce buffer is refilled.
+  bands_.emplace(
+      cfg.height, kBounceRows, 100,
+      [this](int y, int rows) {
+        const int w = cfg_.width;
+        std::memcpy(bounce_, fb_ + static_cast<size_t>(y) * w, static_cast<size_t>(rows) * w * 2);
+        const int x0 = cfg_.gap_x, x1 = cfg_.gap_x + w - 1;
+        const int ya = y + cfg_.gap_y, yb = y + rows - 1 + cfg_.gap_y;
+        const uint8_t cols[4] = {static_cast<uint8_t>(x0 >> 8), static_cast<uint8_t>(x0), static_cast<uint8_t>(x1 >> 8),
+                                 static_cast<uint8_t>(x1)};
+        const uint8_t lines[4] = {static_cast<uint8_t>(ya >> 8), static_cast<uint8_t>(ya), static_cast<uint8_t>(yb >> 8),
+                                  static_cast<uint8_t>(yb)};
+        command(0x2A, cols, 4);
+        command(0x2B, lines, 4);
+        return esp_lcd_panel_io_tx_color(io_, static_cast<int>(kRamWrite), bounce_, static_cast<size_t>(rows) * w * 2) ==
+               ESP_OK;
+      },
+      [this](uint32_t ms) { return xSemaphoreTake(done_, pdMS_TO_TICKS(ms)) == pdTRUE; });
   ESP_LOGI(TAG, "CO5300 %ux%u ready", cfg.width, cfg.height);
   return true;
 }
@@ -154,45 +175,27 @@ hg::DisplayInfo AmoledDisplay::info() const {
   di.swap_bytes = true;  // big-endian RGB565 on the wire
   di.has_backlight = true;  // brightness command 0x51
   di.round = cfg_.round;
+  di.corner_inset = cfg_.corner_inset;
   di.corner_radius = cfg_.corner_radius;
-  di.emissive = true;  // AMOLED: black pixels are off
+  di.emissive = true;
   return di;
 }
 
 void AmoledDisplay::flush(uint16_t y0, uint16_t y1) {
-  const int w = cfg_.width, h = cfg_.height;
   // Even start and even span: widen the dirty rows by at most one on each side.
-  int top = y0 & ~1;
-  int bottom = std::min(h, (y1 + 1) & ~1);
-  const int x0 = cfg_.gap_x, x1 = cfg_.gap_x + w - 1;
-  for (int y = top; y < bottom; y += kBounceRows) {
-    const int rows = std::min(kBounceRows, bottom - y);
-    std::memcpy(bounce_, fb_ + static_cast<size_t>(y) * w, static_cast<size_t>(rows) * w * 2);
-    const int ya = y + cfg_.gap_y, yb = y + rows - 1 + cfg_.gap_y;
-    const uint8_t cols[4] = {static_cast<uint8_t>(x0 >> 8), static_cast<uint8_t>(x0), static_cast<uint8_t>(x1 >> 8),
-                             static_cast<uint8_t>(x1)};
-    const uint8_t lines[4] = {static_cast<uint8_t>(ya >> 8), static_cast<uint8_t>(ya), static_cast<uint8_t>(yb >> 8),
-                              static_cast<uint8_t>(yb)};
-    command(0x2A, cols, 4);
-    command(0x2B, lines, 4);
-    esp_lcd_panel_io_tx_color(io_, static_cast<int>(kRamWrite), bounce_, static_cast<size_t>(rows) * w * 2);
-    // The bounce buffer is reused: wait until the DMA transfer has finished.
-    xSemaphoreTake(done_, pdMS_TO_TICKS(100));
-  }
+  const int top = y0 & ~1;
+  const int bottom = std::min<int>(cfg_.height, (y1 + 1) & ~1);
+  report_band_event(TAG, bands_->flush(top, bottom));
 }
 
 void AmoledDisplay::set_backlight(uint8_t percent) {
   const uint8_t level = static_cast<uint8_t>(255u * std::min<uint8_t>(percent, 100) / 100u);
+  // Zero is screen sleep: turn the panel's output off too (display off keeps
+  // its memory, so drawing continues and waking needs no redraw delay).
+  if (level && !panel_on_) command(0x29, nullptr, 0);  // display on
   command(0x51, &level, 1);
-}
-
-void AmoledDisplay::set_sleep(bool asleep) {
-  if (!cfg_.sleep_when_dark) return;
-  if (!asleep && board_sleep) board_sleep(false);  // the processor at full speed for the redraw
-  command(asleep ? 0x10 : 0x11, nullptr, 0);       // sleep in / sleep out
-  // The controller needs this long before its next sleep command or pixels.
-  vTaskDelay(pdMS_TO_TICKS(120));
-  if (asleep && board_sleep) board_sleep(true);
+  if (!level && panel_on_) command(0x28, nullptr, 0);  // display off
+  panel_on_ = level != 0;
 }
 
 }  // namespace hgp

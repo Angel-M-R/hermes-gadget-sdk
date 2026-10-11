@@ -32,6 +32,7 @@ struct DisplayInfo {
   // OLED / AMOLED: an unlit pixel draws no power, so the UI paints its
   // background and bars pure black instead of a dark tint.
   bool emissive = false;
+  uint8_t corner_inset = 0;  // extra top-bar inset when no glass radius is known
 };
 
 // A full-frame RGB565 framebuffer owned by the port (PSRAM on hardware).
@@ -91,7 +92,8 @@ class Storage {
  public:
   virtual ~Storage() = default;
   virtual std::optional<std::string> get(std::string_view key) = 0;
-  virtual void set(std::string_view key, std::string_view value) = 0;
+  // False when the value could not be saved (the key stays as it was).
+  virtual bool set(std::string_view key, std::string_view value) = 0;
   virtual void erase(std::string_view key) = 0;
 };
 
@@ -141,6 +143,11 @@ class Power {
   // Override when this controls a peripheral rail rather than device shutdown.
   virtual bool can_power_off() const { return true; }
   virtual bool power_off() = 0;
+  // True once per short press of a power key only the PMIC can see. Polled.
+  virtual bool take_key_press() { return false; }
+  // Whether external (USB) power is present right now: a cheap read. Unknown
+  // counts as plugged in, so Wi-Fi retries keep their shortest interval.
+  virtual std::optional<bool> external_power() { return std::nullopt; }
 };
 
 // Everything except `system` and `transport` may be null when the board lacks it.

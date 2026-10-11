@@ -15,6 +15,7 @@
 |---|---|
 | Device stays on Connecting | Use the URL from `hermes gadget info`. Keep the gateway running and allow its port through the host firewall. A board cannot use `127.0.0.1` to reach another computer |
 | Board cannot join Wi-Fi | Check the password and use a 2.4 GHz network |
+| Screen stays dark but the USB console answers | The display failed to start and the gadget runs without it. The boot log names the call that failed (`... failed: ESP_ERR_...`); check the wiring, the panel revision and the board profile |
 | "No pairing code yet" | An allowlist may reject unknown senders. Keep `platforms.gadget.extra.unauthorized_dm_behavior: pair`, or add the device ID to `GADGET_ALLOWED_USERS`. Check `hermes pairing list` |
 | "Device key does not match" | After a factory reset, run `hermes gadget forget <device_id>` on the Hermes computer, then pair again |
 | Browser cannot find a board | Use Chrome or Edge on a computer and a USB data cable. If there are two USB ports, use UART for settings. Close other serial monitors |
@@ -27,6 +28,12 @@
 | Simulator records silence | Install the audio extra and enable the microphone in **Settings** or use `--live-audio`. Check the system microphone permissions and default input. The audio status under the conversation reports microphone errors |
 | Voice is not transcribed | Configure speech recognition on the Hermes computer |
 | Replies are text only | Configure TTS, check that `speak_replies` is not `false`, and enable simulator live audio. Non-WAV TTS needs `ffmpeg` on the Hermes computer |
+
+## Screen
+
+| Symptom | What to check |
+|---|---|
+| Screen freezes while voice, Wi-Fi and touch keep working | [Save a board report](#save-a-board-report). `LCD transfer timed out` in its log means the panel's SPI transfer did not finish; the screen resumes by itself if it does. `LCD transfer failed` stops the screen until the board restarts. Restart the board and send the report with a bug report |
 
 ## Save a board report
 

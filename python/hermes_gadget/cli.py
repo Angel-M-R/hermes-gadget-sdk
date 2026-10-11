@@ -164,7 +164,7 @@ def cmd_plugin_install(args) -> int:
     print(f"installed plugin -> {target}{' (linked)' if args.link else ''}")
     print("\nNext:")
     print("  hermes plugins enable gadget")
-    print("  hermes gateway setup         # choose Hermes Gadget; applies the branch voice")
+    print("  hermes gateway setup         # choose Hermes Gadget; keeps your voice settings")
     print("  hermes gateway run            # or restart your gateway service")
     print("  hermes gadget info            # shows the URL to give your device")
     return 0
@@ -247,7 +247,7 @@ def _diag_summary(report: dict) -> list[str]:
         out.append("parts: " + ", ".join(
             f"{k} {'yes' if v is True else 'no' if v is False else v}" for k, v in parts.items()))
     if isinstance(report.get("i2c"), list):
-        out.append("I2C: " + (" ".join(report["i2c"]) or "nothing answered"))
+        out.append("I2C: " + (", ".join(report["i2c"]) or "nothing answered"))
     wifi = report.get("wifi")
     if isinstance(wifi, dict):
         out.append(f"Wi-Fi: joined {wifi.get('ssid')} ({wifi.get('rssi')} dBm), {wifi.get('ip', 'no address')}"

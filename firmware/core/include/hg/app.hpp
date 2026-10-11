@@ -76,6 +76,13 @@ struct Action {
   std::function<bool(const json::Value& args, json::Value& result, std::string& error)> handler;
 };
 
+// The temporary Wi-Fi setup network, as the port knows it. Lets the setup
+// screen show a scannable code beside the credentials.
+struct WifiSetupAp {
+  std::string ssid;
+  std::string password;
+};
+
 class App {
  public:
   App(Hal& hal, DeviceProfile profile);
@@ -131,15 +138,12 @@ class App {
   bool start_wifi_setup();
   void close_wifi_setup();
   bool wifi_setup_open() const { return !wifi_setup_text_.empty(); }
-  // These run on the app task. Start returns private, on-screen instructions
-  // (empty when setup can't start) and, for a QR code beside them, the text
-  // that joins the setup network (wifi_join_code).
-  struct WifiSetup {
-    std::string text;
-    std::string join_code;
-  };
-  std::function<WifiSetup()> on_wifi_setup;
+  // Runs on the app task. Empty instructions mean setup could not start.
+  std::function<std::string()> on_wifi_setup;
   std::function<void()> on_wifi_setup_close;
+  // Optional: the temporary network's name and password, so the setup screen can
+  // show a QR code. The port sets this only where it has the values.
+  std::function<WifiSetupAp()> on_wifi_setup_ap;
 
   // Serial-console command (provisioning, bench automation). Returns the
   // response; machine-readable lines start with '@'.
@@ -245,6 +249,8 @@ class App {
   void dismiss_overlay();
   // A question from Hermes is on screen (it waits while the user is recording).
   bool prompt_showing() const;
+  // Holding the title (or round settings target) would open or close settings.
+  bool settings_hold_live() const;
   // True when a press that started at `pressed_at` may answer the question.
   bool prompt_armed(uint32_t pressed_at) const;
   void answer_prompt(bool yes);
@@ -287,15 +293,20 @@ class App {
   Menu menu_ = Menu::Closed;
   HardwareCheck hardware_check_ = HardwareCheck::None;
   std::string check_result_;
-  std::string wifi_setup_text_, wifi_setup_code_;
+  std::string wifi_setup_text_;
+  // The setup network's scannable code, encoded once when the screen opens.
+  qr::Code wifi_setup_qr_;
   bool talk_held_ = false;
   bool settings_chord_fired_ = false;
   uint32_t talk_down_at_ = 0;
   bool talk_release_pending_ = false;  // TALK is up, within talk_release_grace_ms
   uint32_t talk_up_at_ = 0;
   std::optional<PowerStatus> power_status_;
-  uint32_t power_read_at_ = 0, activity_at_ = 0;
+  uint32_t power_read_at_ = 0, activity_at_ = 0, power_key_polled_at_ = 0;
   uint32_t screen_timeout_ms_ = 0;
+  // What the battery indicator shows, in the order a tap cycles through.
+  enum class BatteryIndicator : uint8_t { Icon, Percentage, Both, Off };
+  BatteryIndicator battery_display_ = BatteryIndicator::Off;
   bool display_dimmed_ = false, display_sleeping_ = false, power_off_armed_ = false;
   bool display_off_by_user_ = false;  // the power key switched it off
   uint8_t wake_buttons_ = 0;

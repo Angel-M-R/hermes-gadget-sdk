@@ -32,13 +32,13 @@ def test_setup_enables_the_platform_in_config_yaml(hermes_home, monkeypatch):
     from hermes_gadget_plugin import setup
 
     monkeypatch.setattr("hermes_cli.setup.prompt", lambda question, default=None, password=False: "9100")
+    expected_tts = load_config()["tts"]
     setup.interactive_setup()
     assert get_config_path() == hermes_home / "config.yaml" and get_config_path().is_file()
     gadget = load_config()["platforms"]["gadget"]
     assert gadget["enabled"] is True
     assert gadget["extra"]["port"] == 9100
-    assert load_config()["tts"]["provider"] == "edge"
-    assert load_config()["tts"]["edge"]["voice"] == "es-ES-XimenaNeural"
+    assert load_config()["tts"] == expected_tts
 
 
 @pytest.mark.parametrize("provider, voice_config", [
@@ -46,7 +46,7 @@ def test_setup_enables_the_platform_in_config_yaml(hermes_home, monkeypatch):
     ("piper", "  piper:\n    voice: es_ES-sharvard-medium\n  edge:\n    speed: 1.2\n"),
     ("openai", "  openai:\n    voice: nova\n  edge:\n    speed: 1.2\n"),
 ])
-def test_repeated_setup_overwrites_a_chosen_voice_and_keeps_other_config(hermes_home, monkeypatch, provider, voice_config):
+def test_repeated_setup_preserves_a_chosen_voice_and_other_config(hermes_home, monkeypatch, provider, voice_config):
     from hermes_cli.config import get_config_path, load_config
 
     from hermes_gadget_plugin import setup
@@ -57,12 +57,11 @@ def test_repeated_setup_overwrites_a_chosen_voice_and_keeps_other_config(hermes_
         encoding="utf-8",
     )
     monkeypatch.setattr("hermes_cli.setup.prompt", lambda question, default=None, password=False: default)
+    expected_tts = load_config()["tts"]
     for _ in range(2):
         setup.interactive_setup()
         config = load_config()
-        assert config["tts"]["provider"] == "edge"
-        assert config["tts"]["edge"]["voice"] == "es-ES-XimenaNeural"
-        assert config["tts"]["edge"]["speed"] == 1.2
+        assert config["tts"] == expected_tts
         assert config["agent"]["max_turns"] == 7
         assert "# Keep this comment" in get_config_path().read_text(encoding="utf-8")
 
@@ -91,6 +90,6 @@ def test_pair_approves_through_hermes_pairing_store(hermes_home, capsys):
     devices.remember_pairing(DEVICE, code, f"hermes pairing approve gadget {code}", 3600)
     assert not PairingStore().is_approved("gadget", DEVICE)
 
-    cli._cmd_pair(types.SimpleNamespace(yes=True, timeout=5))
+    cli._cmd_pair(types.SimpleNamespace(yes=True, timeout=5, device=None))
     assert PairingStore().is_approved("gadget", DEVICE)
     assert "Approved Desk" in capsys.readouterr().out

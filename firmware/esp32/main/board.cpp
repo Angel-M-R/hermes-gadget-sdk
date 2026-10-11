@@ -16,12 +16,20 @@ namespace {
 #define HG_BOARD_NAME "esp32s3-touch-amoled-1.75c"
 #elif CONFIG_HG_BOARD_AMOLED_18
 #define HG_BOARD_NAME "esp32s3-touch-amoled-1.8"
+#elif CONFIG_HG_BOARD_AIPI_LITE
+#define HG_BOARD_NAME "aipi-lite"
 #elif CONFIG_HG_BOARD_BOX3
 #define HG_BOARD_NAME "esp32-s3-box-3"
 #elif CONFIG_HG_BOARD_CORES3
 #define HG_BOARD_NAME "m5stack-cores3"
+#elif CONFIG_HG_BOARD_WS_ESP32S3_TOUCH_LCD_185C_V2
+#define HG_BOARD_NAME "waveshare-esp32-s3-touch-lcd-1.85c-v2"
 #elif CONFIG_HG_BOARD_T_DISPLAY_S3
 #define HG_BOARD_NAME "tdisplay-s3"
+#elif CONFIG_HG_BOARD_CROWPANEL_21
+#define HG_BOARD_NAME "crowpanel-2.1"
+#elif CONFIG_HG_BOARD_CROWPANEL_50
+#define HG_BOARD_NAME "crowpanel-5.0"
 #elif CONFIG_HG_BOARD_WS_ESP32S3_LCD_154
 #define HG_BOARD_NAME "waveshare-esp32s3-lcd-154"
 #else
@@ -96,37 +104,35 @@ BoardConfig make() {
   b.amoled.rst = 1;
   b.touch.rst = 2;
   b.codec.mclk = 16;
-  b.pwr_key = {};  // This model has no TCA9554. PWR retains its hardware role.
+  b.pwr_key = {};  // This model has no TCA9554: PWR's short press is read from the AXP2101.
+  b.axp_power_key = true;
   b.axp_audio_supply = true;  // ALDO1 supplies the analog audio circuit.
+  b.codec.speaker_pa = true;  // the amplifier draws power only while sound plays
 #endif
   return b;
 }
 #elif CONFIG_HG_BOARD_AMOLED_18
-// Waveshare ESP32-S3-Touch-AMOLED-1.8 V2: rectangular 368x448 AMOLED (CO5300,
-// QSPI), CST820 touch, one ES8311 for both the speaker and the single
-// microphone, AXP2101 PMIC. A TCA9554 expander resets the panel (P0), powers it
-// (P1) and resets the touch controller (P2); P7 is the SD card's chip select,
-// kept high. The V1 board (SH8601 panel, FT3168 touch) is different hardware.
+// Waveshare ESP32-S3-Touch-AMOLED-1.8 (V2): rectangular 368x448 AMOLED (CO5300,
+// QSPI), CST820 touch, an ES8311 codec with an analog electret microphone,
+// AXP2101 PMIC and a TCA9554 expander that drives the display/touch resets.
 // Pins: docs/hardware.md#esp32-s3-touch-amoled-18
 BoardConfig make() {
   BoardConfig b{};
   b.name = kBoardName;
   b.amoled.enabled = true;
-  b.amoled.panel = AmoledPanel::Rect18;
   b.amoled.width = 368;
-  b.amoled.height = 448;
+  b.amoled.height = 448;    // full glass; the UI pads its text clear of the rounded corners
   b.amoled.cs = 12;
   b.amoled.sclk = 11;
   b.amoled.d0 = 4;
   b.amoled.d1 = 5;
   b.amoled.d2 = 6;
   b.amoled.d3 = 7;
-  b.amoled.gap_x = 16;  // the 368 columns start at 16 in the controller's RAM
-  b.amoled.corner_radius = 40;  // measured on the glass: the bars' text stays clear of it
-  // Dark screen: the panel and the CST820 sleep and the processor slows down.
-  // A reset is all that wakes the CST820, so only BOOT and PWR light it again.
-  b.amoled.sleep_when_dark = true;
-  b.expander_resets = {true, 0x20, 0x87, 0x80};  // P0, P1, P2 and P7; P7 stays high
+  b.amoled.rst = -1;        // reset comes from the TCA9554 (LCD_RST, P0)
+  b.amoled.gap_x = 16;      // the controller RAM is wider than the 368-wide glass
+  b.amoled.gap_y = 0;       // touch and framebuffer use the same full-glass coordinates
+  b.amoled.corner_radius = 40;  // fork layout, measured on the 1.8-inch glass
+  b.amoled.panel = AmoledPanel::Co5300_368;
   b.i2c = {15, 14, 400000};
   b.codec.enabled = true;
   b.codec.mclk = 16;
@@ -135,25 +141,63 @@ BoardConfig make() {
   b.codec.dout = 8;
   b.codec.din = 10;
   b.codec.pa = 46;
-  b.codec.mic = MicCodec::Es8311;
+  b.codec.mic = MicCodec::Es8311;  // analog electret microphone into the ES8311 ADC
   b.touch.enabled = true;
-  b.touch.controller = TouchController::Cst820;
+  b.touch.controller = TouchController::Cst816;  // the CST820 sends the same report
   b.touch.addr = 0x15;
-  b.touch.expander_rst = 2;
   b.touch.width = 368;
   b.touch.height = 448;
-  // PWR reaches the ESP32 only through the AXP2101: a short press turns the
-  // screen off or on, a long one is still the PMIC's power-off.
+  b.touch.offset_y = 0;     // full-glass UI, so no touch translation
   b.axp2101 = true;
   b.axp_power_key = true;
-  // Both keys are on the right edge, BOOT above PWR.
   b.talk_key = {'r', -100};
   b.power_key = {'r', 100};
-  b.buttons = {0, -1, -1, -1};  // BOOT, the upper side key, also works as TALK
-  // BOOT is small and stiff, and the thumb holding it lifts for a moment now
-  // and then. With a 30 ms debounce like Buttons', the esp32-muse-agent port
-  // of this board saw that end recordings after 1 to 3 s (see NOTICE).
-  b.talk_release_grace_ms = 400;
+  b.talk_release_grace_ms = 400;  // tolerate brief BOOT releases while holding TALK
+  // TCA9554: P0 LCD_RST, P1 the panel's power rail, P2 TOUCH_RST.
+  b.expander_reset = {0x20, 0x07, 20, 150};
+  b.buttons = {0, -1, -1, -1};  // BOOT also works as TALK
+  b.talk_label = "BOOT";
+  b.cancel_label = "Swipe down";
+  return b;
+}
+#elif CONFIG_HG_BOARD_WS_ESP32S3_TOUCH_LCD_185C_V2
+// Rev2.0 only. Pins and RMNM audio packing: Waveshare factory demo and V2
+// schematic, pinned sources in docs/hardware.md. Not compatible with V1.
+BoardConfig make() {
+  BoardConfig b{};
+  b.name = kBoardName;
+  b.lcd.enabled = true;
+  b.lcd.controller = LcdController::St77916;
+  b.lcd.width = b.lcd.height = 360;
+  b.lcd.swap_xy = b.lcd.mirror_x = b.lcd.mirror_y = false;
+  b.lcd.round = true;
+  b.lcd.sclk = 40;
+  b.lcd.mosi = 46;
+  b.lcd.d1 = 45;
+  b.lcd.d2 = 42;
+  b.lcd.d3 = 41;
+  b.lcd.cs = 21;
+  b.lcd.backlight = 5;
+  b.lcd.spi_mhz = 80;
+  b.i2c = {11, 10, 400000};
+  b.expander_reset.mask = 0x03;  // P0 touch reset, P1 LCD reset (EXIO1/EXIO2 in the demo)
+  b.codec.enabled = true;
+  b.codec.mclk = 2;
+  b.codec.bclk = 48;
+  b.codec.ws = 38;
+  b.codec.dout = 47;
+  b.codec.din = 39;
+  b.codec.pa = 15;
+  b.codec.stereo32 = true;
+  b.codec.rmnm_mics = true;
+  b.codec.speaker_pa = true;
+  b.codec.dac_mclk = false;     // the factory demo clocks the ES8311 from BCLK
+  b.codec.es7210_mics = 0x0f;   // MIC1 playback reference, MIC2/MIC4 microphones
+  b.touch.enabled = true;
+  b.touch.controller = TouchController::Cst816;
+  b.touch.addr = 0x15;
+  b.touch.width = b.touch.height = 360;
+  b.buttons = {0, -1, -1, -1};
   b.talk_label = "BOOT";
   b.cancel_label = "Swipe down";
   return b;
@@ -220,6 +264,7 @@ BoardConfig make() {
   b.codec = {true, 2, 17, 45, 15, 16, 46};
   b.touch.enabled = true;
   b.touch.controller = TouchController::Box3;
+  b.touch.int_gpio = 3;  // Box3 wires the touch IRQ to GPIO3
   b.touch.width = 320;
   b.touch.height = 240;
   b.buttons = {0, -1, -1, -1};
@@ -294,6 +339,142 @@ BoardConfig make() {
   b.buttons = {0, 14, -1, -1};
   b.talk_label = "BOOT";
   b.cancel_label = "B2";
+  return b;
+}
+#elif CONFIG_HG_BOARD_AIPI_LITE
+// AIPI Lite (Xorigin): 128x128 ST7789-family SPI panel, one ES8311 codec doing
+// both directions on a single duplex I2S bus, BOOT (GPIO42) and power (GPIO1)
+// keys, and a power latch on GPIO10.
+// Pins: xiaozhi-esp32 board xorigin/aipi-lite (upstream mapping).
+BoardConfig make() {
+  BoardConfig b{};
+  b.name = kBoardName;
+  b.lcd.enabled = true;
+  b.lcd.width = 128;
+  b.lcd.height = 128;
+  b.lcd.swap_xy = true;
+  b.lcd.mirror_x = true;
+  b.lcd.mirror_y = false;
+  b.lcd.invert = false;
+  b.lcd.gap_x = 0;
+  b.lcd.gap_y = 0;
+  b.lcd.mosi = 17;
+  b.lcd.sclk = 16;
+  b.lcd.cs = 15;
+  b.lcd.dc = 7;
+  b.lcd.rst = 18;
+  b.lcd.backlight = 3;
+  b.lcd.bgr = true;      // upstream drives the panel in BGR order
+  b.lcd.spi_mhz = 20;    // and at 20 MHz
+  b.i2c = {5, 4, 400000};
+  b.codec.enabled = true;
+  b.codec.mclk = 6;
+  b.codec.bclk = 14;
+  b.codec.ws = 12;
+  b.codec.dout = 11;
+  b.codec.din = 13;
+  b.codec.pa = 9;
+  b.codec.mic = MicCodec::Es8311;
+  // Power rail: GPIO10 must latch high before the ES8311 on I2C answers. The
+  // battery divider on GPIO2 (ADC1_CH1) is not measured yet, and upstream reads
+  // the GPIO8 charge signal active-high where LatchPower expects active-low, so
+  // neither is reported for now.
+  b.latch_power = {true, -1, 10, -1};
+  b.buttons = {42, 1, -1, -1};
+  b.talk_label = "BOOT";
+  b.cancel_label = "PWR";
+  return b;
+}
+#elif CONFIG_HG_BOARD_CROWPANEL_21
+// Elecrow CrowPanel 2.1-inch HMI; pin map from Elecrow's official Arduino demo.
+BoardConfig make() {
+  BoardConfig b{};
+  b.name = kBoardName;
+  b.lcd.enabled = true;
+  b.lcd.width = 480;
+  b.lcd.height = 480;
+  b.lcd.round = true;
+  b.lcd.swap_xy = false;
+  b.lcd.mirror_x = false;
+  b.lcd.mirror_y = false;
+  b.lcd.backlight = 6;
+  // Vendor sketch drives GPIO6 PWM active-high (ledcWrite 204/255 = bright).
+  b.lcd.backlight_invert = false;
+  b.lcd.bus.type = LcdBus::Type::Rgb;
+  b.lcd.rgb.de = 40;
+  b.lcd.rgb.vsync = 7;
+  b.lcd.rgb.hsync = 15;
+  b.lcd.rgb.pclk = 41;
+  const int rgb_data[16] = {46, 3, 8, 18, 17, 14, 13, 12, 11, 10, 9, 5, 45, 48, 47, 21};
+  for (int i = 0; i < 16; ++i) b.lcd.rgb.data[i] = rgb_data[i];
+  b.lcd.rgb.cmd_cs = 16;
+  b.lcd.rgb.cmd_sclk = 2;
+  b.lcd.rgb.cmd_sda = 1;
+  b.lcd.rgb.i2c_expander = 0x21;
+  b.lcd.rgb.pclk_hz = 12000000;
+  b.i2c = {38, 39, 400000};
+  b.touch.enabled = true;
+  b.touch.controller = TouchController::Cst816;  // its CST826 sends the same report
+  b.touch.addr = 0x15;
+  b.touch.width = 480;
+  b.touch.height = 480;
+  b.pwr_key.enabled = true;
+  b.pwr_key.addr = 0x21;
+  b.pwr_key.bit = 5;
+  b.pwr_key.active_high = false;
+  b.pwr_key.pcf8574 = true;  // the knob's push button is PCF8574 P5
+  b.encoder = {42, 4};
+  b.buttons = {-1, -1, -1, -1};
+  b.talk_label = "BOOT";
+  b.cancel_label = "Knob";
+  return b;
+}
+#elif CONFIG_HG_BOARD_CROWPANEL_50
+// Elecrow CrowPanel 5.0-inch HMI (DIS07050H). 800x480 RGB ILI6122/ILI5960 with
+// GT911 capacitive touch. Pin map from Elecrow's official Arduino demo (repo
+// Elecrow-RD/CrowPanel-5.0-HMI-ESP32-Display-800x480). No onboard audio.
+BoardConfig make() {
+  BoardConfig b{};
+  b.name = kBoardName;
+  b.lcd.enabled = true;
+  b.lcd.width = 800;
+  b.lcd.height = 480;
+  b.lcd.round = false;
+  b.lcd.swap_xy = false;
+  b.lcd.mirror_x = false;
+  b.lcd.mirror_y = false;
+  b.lcd.backlight = 2;
+  // GPIO2 drives the backlight rail; the vendor sketch writes it HIGH on boot.
+  b.lcd.backlight_invert = false;
+  b.lcd.bus.type = LcdBus::Type::Rgb;
+  b.lcd.rgb.controller = RgbController::Ili6122;
+  b.lcd.rgb.de = 40;
+  b.lcd.rgb.vsync = 41;
+  b.lcd.rgb.hsync = 39;
+  b.lcd.rgb.pclk = 0;
+  // B0..B4, G0..G5, R0..R4 in the vendor sketch's D0..D15 order.
+  const int rgb_data[16] = {8, 3, 46, 9, 1, 5, 6, 7, 15, 16, 4, 45, 48, 47, 21, 14};
+  for (int i = 0; i < 16; ++i) b.lcd.rgb.data[i] = rgb_data[i];
+  b.lcd.rgb.swap_red_blue = false;  // blue on data[0..4] is native RGB565
+  b.lcd.rgb.i2c_expander = -1;  // no PCF8574; GPIO 38 is the user GPIO_D header pin, not a panel enable
+  b.lcd.rgb.pclk_hz = 15000000;
+  // Scanout timings from the vendor LGFX config.
+  b.lcd.rgb.timings.hsync_pulse_width = 4;
+  b.lcd.rgb.timings.hsync_back_porch = 43;
+  b.lcd.rgb.timings.hsync_front_porch = 8;
+  b.lcd.rgb.timings.vsync_pulse_width = 4;
+  b.lcd.rgb.timings.vsync_back_porch = 12;
+  b.lcd.rgb.timings.vsync_front_porch = 8;
+  b.lcd.rgb.timings.pclk_active_neg = true;
+  b.i2c = {19, 20, 400000};
+  b.touch.enabled = true;
+  b.touch.controller = TouchController::Box3;  // managed GT911/TT21100 driver
+  b.touch.int_gpio = -1;  // touch INT not wired; the driver polls
+  b.touch.width = 800;
+  b.touch.height = 480;
+  b.buttons = {-1, -1, -1, -1};
+  b.talk_label = "BOOT";
+  b.cancel_label = "Screen";
   return b;
 }
 #elif CONFIG_HG_BOARD_CUSTOM
@@ -371,5 +552,7 @@ int lcd_power_pin(const BoardConfig& b) {
   return -1;
 #endif
 }
+
+const char* board_tag() { return kBoardTag; }
 
 }  // namespace hgp

@@ -51,6 +51,22 @@ Secrets go in `~/.hermes/.env`, following Hermes's rule that `.env` is only for 
 
 > If you set `GADGET_ALLOWED_USERS` (or `GATEWAY_ALLOWED_USERS`), Hermes switches unknown senders from "pair" to "ignore". Keep `unauthorized_dm_behavior: pair` in the platform's `extra` so new devices still receive pairing codes.
 
+### Change the gadget port
+
+The adapter reads `platforms.gadget.extra` when the gateway creates it. Editing the configuration or toggling the plugin does not rebind a running gadget listener. Restart the gateway to apply changes to the port, host, path, or TLS settings.
+
+If another service uses the default port, 8765, choose a free port on the Hermes computer. For example:
+
+```bash
+hermes config set platforms.gadget.extra.port 9100
+```
+
+Restart the gateway service with `hermes gateway restart`. If you run `hermes gateway run` in a terminal, stop that process and start it again. Allow the new port through the host firewall when devices connect from other computers.
+
+After the restart, run `hermes gadget info` and use the new URL to update each device's server address. For a local simulator, this example becomes `hermes-gadget sim --url ws://127.0.0.1:9100/gadget`. Devices configured with the old port cannot reconnect until their server address changes.
+
+`hermes gadget info` prints the configured URL. It does not confirm that the running gateway has rebound to that address. Check the gateway's startup log for the listening port and confirm that a device reconnects.
+
 ## Hermes surfaces the SDK uses
 
 | Need | Hermes surface | Notes |
@@ -77,7 +93,13 @@ Secrets go in `~/.hermes/.env`, following Hermes's rule that `.env` is only for 
 | Tool session context | `gateway.session_context.get_session_env` | `HERMES_SESSION_PLATFORM` / `HERMES_SESSION_CHAT_ID` pick the default device |
 | Durable state | `plugins.plugin_storage.plugin_data_dir("gadget")` | Enrolled device keys, pending pairing codes, and firmware staged for updates (`updates/`) |
 | Host CLI | `ctx.register_cli_command("gadget", ...)` | `hermes gadget devices / forget / info / pair / update`. `pair` waits for a device to show a code and approves it after asking. `update` stages an image in the plugin's data directory (a file, or with `--latest` the newest release's image for the device's board, checked against the release manifest); the gateway's adapter installs it once the device is online and writes progress back for the command |
-| Send and cron targets | `parse_target_ref_fn` | `gadget:hg-0123456789abcdef` works with send_message and cron delivery |
+| Send and cron targets | `parse_target_ref_fn`, `cron_deliver_env_var` | `gadget:hg-0123456789abcdef` works with send_message and cron delivery; `GADGET_HOME_CHANNEL` supplies a default cron device |
+
+### Scheduled delivery
+
+Set a cron job's `deliver` to `gadget:hg-0123456789abcdef`, replacing the example ID with one from `hermes gadget devices`. The gadget must be paired and online, with the gateway running, to receive the scheduled message.
+
+To use `deliver="gadget"`, configure the gadget home channel. By default, `auto_home: true` makes the first approved device the home channel. An explicit `GADGET_HOME_CHANNEL` device ID in the profile's `.env` overrides that default. A target with an explicit device ID does not require this environment variable.
 
 ### Voice round trip
 
@@ -103,6 +125,8 @@ The SDK reuses Hermes's DM pairing instead of inventing its own:
 **Home channel.** Hermes opens each new session on a platform without a home channel with a "type /sethome" notice, which a device without a keyboard can't act on. So when a device is approved and the gadget platform has no home channel (`platforms.gadget.home_channel` or `GADGET_HOME_CHANNEL`), the adapter makes that device the home channel, as `/sethome` would, and saves it to `config.yaml`. Cron results and messages sent to `gadget` then go to that device. Run `/sethome` from another device to move it, or set `auto_home: false` to turn this off.
 
 The pairing code authorizes the chat in Hermes. The device key, enrolled on first contact and proven by HMAC afterwards, keeps another device from impersonating an approved one.
+
+Until Hermes approves a device, its record is *pending*: at most 16 devices may wait at once, at most 4 from one network address, and a pending record expires an hour after the device's last contact (it simply re-enrolls on its next connection). The hub refuses further strangers with an `error` of code `busy`. `hermes gadget devices` marks pending devices with "waiting to pair". `hermes gadget pair --yes` approves without asking only when exactly one device is waiting; with several, name one: `hermes gadget pair --yes <device>`.
 
 ### Confirmations
 
@@ -130,6 +154,8 @@ A voice turn is speech-to-text, the model turn, then text-to-speech. Most of the
 
 ## Where the SDK leans on behavior that is not a formal API
 
+`plugin/compat.py` lists every gateway module the adapter imports and every private `BasePlatformAdapter` member it overrides or calls, with the Hermes commit CI tests against. The gateway runs that check before it creates the adapter, so a Hermes that has changed one of them fails with a message naming it, instead of a traceback from inside the gateway. A test keeps the list complete.
+
 These work on current Hermes and are covered by `tests/test_adapter_hermes.py` and `tests/test_gateway_e2e.py`, but they are conventions rather than documented contracts:
 
 1. **Spoken replies by default.** The adapter overrides `BasePlatformAdapter._should_auto_tts_for_chat`, a private method the runner consults. Hermes's own docs endorse overriding private hooks such as `_keep_typing` for platform UX, but this one is not listed.
@@ -138,6 +164,7 @@ These work on current Hermes and are covered by `tests/test_adapter_hermes.py` a
 4. **Transcript echo detection** matches the echo format: microphone emoji plus quoted text. If the format changes, the transcript is shown as an ordinary reply; nothing breaks.
 5. **Self-confirming `/new`** reads `tools.slash_confirm.get_pending()` to check that the pending confirmation is for the `new` command. It relies on the runner registering a confirmation before it calls `send_slash_confirm`, which Hermes does on purpose so that fast button presses can't race it. If that changes, the device simply asks.
 6. **Question text** is cut down from Hermes's chat-formatted confirmation by dropping the bullet-list and italic paragraphs. A different layout only means a longer question.
+7. **Per-device speech providers** use `_wants_auto_tts` and `_synthesize_auto_tts` to carry the device context into whole-file synthesis, plus `prepare_tts_text`, `build_auto_tts_output_path` and `tools.tts_tool.text_to_speech_tool`. The startup compatibility check covers these members and imports. Without a per-device override, Hermes's selected provider handles speech as usual.
 
 ## Suggested upstream changes (optional; nothing here blocks the SDK)
 
@@ -172,6 +199,6 @@ Each would replace a workaround above with a small, generic hook that every plat
 
 The adapter binds its own port, so give each profile that serves gadgets a different `platforms.gadget.extra.port`.
 
-Device keys and pending pairing codes live in the plugin data directory. It is resolved with `plugin_data_dir("gadget")` when the adapter connects, so it follows whichever Hermes home the adapter is started under.
+Device keys and pending pairing codes live in the plugin data directory. It is resolved with `plugin_data_dir("gadget")` when the adapter connects, so it follows whichever Hermes home the adapter is started under. The gateway re-reads `devices.json` before each lookup or change, so `hermes gadget forget` and `hermes gadget pair` from another terminal take effect without a restart.
 
 The agent tools look up the adapter for the session's profile (`HERMES_SESSION_PROFILE`). Multi-profile setups have only been exercised in unit tests so far.

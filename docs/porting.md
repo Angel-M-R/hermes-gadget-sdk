@@ -49,7 +49,7 @@ Complete the [board contribution checklist](../CONTRIBUTING.md#adding-a-board), 
 
 ## A different display
 
-Four display configurations ship: `SpiDisplay` supports ST7789 and ILI9342 variants over SPI; `ParallelDisplay` supports the ST7789 over an 8-bit I80 parallel bus; `AmoledDisplay` supports CO5300 over QSPI, including round AMOLED modules. For a round panel set `round` in the board config: the UI then keeps to the square inside the circle. BOX-3 uses the managed TT21100/GT911 touch drivers. Its LCD and touch share one reset line, so initialize the display before touch. CoreS3 uses FT5x06 for touch and detects the LCD revision through its firmware ID.
+Four display configurations ship: `SpiDisplay` supports ST7789 and ILI9342 variants over SPI, and the ST77916 over QSPI; `ParallelDisplay` supports the ST7789 over an 8-bit I80 parallel bus; `AmoledDisplay` supports CO5300 over QSPI, including round AMOLED modules. For a round panel set `round` in the board config: the UI then keeps to the square inside the circle. BOX-3 uses the managed TT21100/GT911 touch drivers. Its LCD and touch share one reset line, so initialize the display before touch. CoreS3 uses FT5x06 for touch and detects the LCD revision through its firmware ID. Where the LCD and touch resets are TCA9554 expander outputs, set `expander_reset.mask` to those outputs; the other expander bits keep their values.
 
 `ParallelDisplay` is the T-Display-S3 reference. It holds the panel’s active-low RD input, GPIO9, high, configures an 8-bit bus with `esp_lcd_new_i80_bus()`, creates its I80 panel IO with `esp_lcd_new_panel_io_i80()`, and attaches the ST7789 using `esp_lcd_new_panel_st7789()`. Panel reset, initialization, inversion, axis swap, mirroring, address gap and display enable use the `esp_lcd_panel_*` operations; the board-specific ST7789 power/gamma registers are sent through `esp_lcd_panel_io_tx_param()`. Frame rows are transferred through the I80 panel IO in DMA-capable chunks. The T-Display-S3 backlight uses an AW9364 one-wire pulse-counter protocol on its backlight GPIO, not LEDC PWM: drive low for 3 ms to turn it off; drive high to wake/enable it, then send clock pulses to select one of 16 brightness steps. The port maps requested brightness to those steps.
 
@@ -61,9 +61,13 @@ Implement `hg::Display` (`firmware/core/include/hg/hal.hpp`):
 | `framebuffer()` | A width × height RGB565 buffer you own (PSRAM on ESP32) |
 | `flush(y0, y1)` | Push full-width rows `[y0, y1)` to the panel |
 | `set_backlight(percent)` | Optional |
-| `set_sleep(asleep)` | Optional. Called after `set_backlight(0)` when the screen goes dark, and before the backlight returns. Nothing is drawn meanwhile and the whole screen is redrawn after waking, so the port may stop the panel and parts that only serve the screen. `AmoledDisplay` sends the CO5300's sleep in and sleep out when `AmoledConfig::sleep_when_dark` is set, and runs its `board_sleep` hook for the touch controller and processor clock |
+| `set_sleep(asleep)` | Optional. Called after `set_backlight(0)` when the screen goes dark, and before the backlight returns. Nothing is drawn meanwhile and the whole screen is redrawn after waking. The upstream AMOLED driver uses display output off/on in `set_backlight`, keeps touch polling active and leaves this optional hook at its default no-op |
 
 `SpiDisplay` in `port_display.cpp` is the reference. To add ILI9341, GC9A01 or another panel, swap `esp_lcd_new_panel_st7789` for the matching `esp_lcd` driver (most are managed components). For RGB/parallel or QSPI AMOLED panels, the same interface applies with that panel's `esp_lcd` IO.
+
+`SpiDisplay` sends rows through one DMA staging buffer with `hg::BandFlush` (`firmware/drivers/band_flush.hpp`). It never refills the buffer while a transfer may still read it, and a transfer that does not finish pauses the screen without blocking the app. A new panel that stages rows for DMA can use it the same way.
+
+For an active-low GPIO backlight driven by `SpiDisplay`, set `b.lcd.backlight_invert = true` in the board's `make()`. The default is `false` for active-high backlights. LEDC inverts the output so brightness still ranges from 0 percent off to 100 percent on. This flag is separate from `b.lcd.invert`, which controls pixel colors, and does not apply to board-specific backlight callbacks or the T-Display-S3's AW9364 driver. Verify off, intermediate brightness, full brightness, and screen-timeout wake on the physical board.
 
 **Round panels** (for example a 1.75" 466×466 AMOLED): set `round = true`. The UI then draws inside the square inscribed in the circle, keeps everything else dark, centres the status row, and tells the host `"shape": "round"`. Try it with the `sim-466x466-round` simulator board.
 
@@ -82,7 +86,7 @@ The AXP2101 implementation is in `firmware/drivers/axp2101.cpp`, with the ESP32 
 
 CoreS3 has a separate `CoreS3Control` in `firmware/drivers/cores3.cpp`. It enables the required audio supplies, boost and AW9523 reset outputs before display, touch and audio initialization. Its masked writes preserve unrelated settings. `SpiDisplay::board_backlight` routes brightness through DLDO1 on this board. Native tests cover supply values, reset timing, preservation of other registers, brightness and failed I2C access. `CodecAudioConfig::speaker` selects the AW88298 driver for CoreS3; other profiles keep ES8311.
 
-A display that advertises `has_backlight` must accept zero percent to turn dark. `screen_timeout` dims and then darkens an idle display while keeping the device connected. Raw touch drivers should use `TouchGestures`, which consumes the first touch when waking. Button input through `App::on_button` does the same. A touch controller that sleeps with the screen must report a lifted finger before it stops reading, so a hold does not stay pressed.
+A display that advertises `has_backlight` must accept zero percent to turn dark. An OLED or AMOLED driver sets `emissive`, so the UI draws its background true black and leaves those pixels unlit. `screen_timeout` dims and then darkens an idle display while keeping the device connected. Raw touch drivers should use `TouchGestures`, which consumes the first touch when waking. Button input through `App::on_button` does the same.
 
 ## Audio through a codec chip
 
@@ -113,7 +117,7 @@ Boards like the ESP32-S3-BOX family and the ESP32-S3-Touch-AMOLED-1.75 route aud
 
 Set `DeviceProfile::has_cancel_button`, `has_scroll_buttons` and the labels so the hint bar and the `hello` capabilities match the hardware.
 
-Keys that sit beside the screen can be marked with icons: set `DeviceProfile::talk_key` and `power_key` to the edge (`'l'` or `'r'`) and the key's offset from the screen's vertical centre. A key that should turn the screen off and on calls `App::on_power_key()` on each short press; the AMOLED-1.8 reads its PWR key's short-press interrupt from the AXP2101 (`Axp2101::take_short_press`). Touch screens with a speaker get the speaker button for mute automatically.
+Keys that sit beside the screen can be marked with icons: set `DeviceProfile::talk_key` and `power_key` to the edge (`'l'` or `'r'`) and the key's offset from the screen's vertical centre. A key that should turn the screen off and on calls `App::on_power_key()` on each short press; the AMOLED-1.8 reads its PWR key's short-press interrupt from the AXP2101 (`Power::take_key_press`). Touch screens with a speaker get the speaker button for mute automatically.
 
 ## Sensors
 

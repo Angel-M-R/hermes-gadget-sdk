@@ -12,7 +12,6 @@ from hermes_gadget_plugin import cli, setup
 
 DESK, KITCHEN = "hg-0123456789abcdef", "hg-fedcba9876543210"
 SERVER = "ws://192.168.1.20:8765/gadget"
-VOICE_SETTINGS = [("tts.edge.voice", "es-ES-XimenaNeural"), ("tts.provider", "edge")]
 
 
 def test_the_installer_link_carries_the_server_in_the_fragment():
@@ -65,7 +64,7 @@ def test_a_config_write_reports_only_what_hermes_wrote(monkeypatch):
 
 def test_setup_enables_the_platform_and_points_at_the_installer(monkeypatch):
     writes, shown = _setup(monkeypatch, "", {})
-    assert writes == [("platforms.gadget.enabled", "true"), *VOICE_SETTINGS]
+    assert writes == [("platforms.gadget.enabled", "true")]
     assert "Port devices connect to [8765]" in shown
     assert f"  {cli.installer_link(SERVER)}" in shown
     assert any("hermes gadget pair" in line for line in shown)
@@ -73,11 +72,11 @@ def test_setup_enables_the_platform_and_points_at_the_installer(monkeypatch):
 
 def test_setup_writes_a_changed_port_and_keeps_the_old_one_for_nonsense(monkeypatch):
     writes, shown = _setup(monkeypatch, "9000", {})
-    assert writes == [("platforms.gadget.enabled", "true"), ("platforms.gadget.extra.port", "9000"), *VOICE_SETTINGS]
+    assert writes == [("platforms.gadget.enabled", "true"), ("platforms.gadget.extra.port", "9000")]
     assert "Devices connect to ws://192.168.1.20:9000/gadget" in shown
 
     writes, shown = _setup(monkeypatch, "http", {"port": 8800})
-    assert writes == [("platforms.gadget.enabled", "true"), *VOICE_SETTINGS]
+    assert writes == [("platforms.gadget.enabled", "true")]
     assert "'http' isn't a port number; keeping 8800" in shown
     assert "Devices connect to ws://192.168.1.20:8800/gadget" in shown
 
@@ -85,23 +84,14 @@ def test_setup_writes_a_changed_port_and_keeps_the_old_one_for_nonsense(monkeypa
 def test_setup_says_what_to_run_when_it_cannot_write_the_config(monkeypatch):
     _, shown = _setup(monkeypatch, "", {}, writable=False)
     assert any("hermes config set platforms.gadget.enabled true" in line for line in shown)
-    assert any(f"hermes config set {VOICE_SETTINGS[0][0]} {VOICE_SETTINGS[0][1]}" in line for line in shown)
     assert not any("Voice configured:" in line for line in shown)
 
 
-def test_setup_applies_the_branch_voice_and_reports_it(monkeypatch):
+def test_setup_preserves_the_hermes_speech_configuration(monkeypatch):
     writes, shown = _setup(monkeypatch, "", {})
-    assert writes[-2:] == VOICE_SETTINGS
-    assert any(f"Voice configured: {setup.DEFAULT_TTS_NAME}" in line for line in shown)
-    assert any("including other chats" in line for line in shown)
-
-
-def test_setup_does_not_switch_provider_if_the_voice_write_fails(monkeypatch):
-    writes, shown = _setup(monkeypatch, "", {}, failed_key=VOICE_SETTINGS[0][0])
-    assert writes == [("platforms.gadget.enabled", "true"), VOICE_SETTINGS[0]]
-    for key, value in VOICE_SETTINGS:
-        assert any(f"hermes config set {key} {value}" in line for line in shown)
-    assert not any("Voice configured:" in line for line in shown)
+    assert writes == [("platforms.gadget.enabled", "true")]
+    assert not any(key.startswith("tts.") for key, _ in writes)
+    assert any("provider and voice configured in Hermes" in line for line in shown)
 
 
 class FakeDevices:
@@ -135,14 +125,14 @@ class FakeApprovals:
         return {"user_id": device_id, "user_name": ""}
 
 
-def _pair(monkeypatch, stores, approvals, *, yes=False, answers=(), timeout=0.0):
+def _pair(monkeypatch, stores, approvals, *, yes=False, answers=(), timeout=0.0, device=None):
     stores = iter(stores) if isinstance(stores, list) else iter([stores] * 1000)
     monkeypatch.setattr(cli, "_store", lambda: next(stores))
     monkeypatch.setattr(cli, "_pairing_store", lambda: approvals)
     monkeypatch.setattr(cli.time, "sleep", lambda seconds: None)
     replies = iter(answers)
     monkeypatch.setattr("builtins.input", lambda question: next(replies))
-    cli._cmd_pair(types.SimpleNamespace(yes=yes, timeout=timeout))
+    cli._cmd_pair(types.SimpleNamespace(yes=yes, timeout=timeout, device=device))
 
 
 def test_pair_approves_the_device_showing_a_code(monkeypatch, capsys):
@@ -181,3 +171,26 @@ def test_pair_waits_for_a_device_to_ask(monkeypatch, capsys):
     with pytest.raises(SystemExit) as stop:
         _pair(monkeypatch, nobody, approvals, yes=True, timeout=0)
     assert "No gadget asked to pair" in str(stop.value)
+
+
+def test_pair_yes_refuses_to_approve_several_waiting_devices(monkeypatch, capsys):
+    devices = FakeDevices({DESK: {"name": "Desk"}, KITCHEN: {"name": "Kitchen"}},
+                          {DESK: "ABCD2345", KITCHEN: "EFGH6789"})
+    approvals = FakeApprovals({"ABCD2345": DESK, "EFGH6789": KITCHEN})
+    with pytest.raises(SystemExit) as stop:
+        _pair(monkeypatch, devices, approvals, yes=True)
+    assert approvals.approved == set()
+    assert "More than one gadget is waiting" in str(stop.value)
+    assert f"hermes gadget pair --yes {DESK}" in str(stop.value)
+
+
+def test_pair_can_name_the_one_device_to_approve(monkeypatch, capsys):
+    devices = FakeDevices({DESK: {"name": "Desk"}, KITCHEN: {"name": "Kitchen"}},
+                          {DESK: "ABCD2345", KITCHEN: "EFGH6789"})
+    approvals = FakeApprovals({"ABCD2345": DESK, "EFGH6789": KITCHEN})
+    _pair(monkeypatch, devices, approvals, yes=True, device="kitchen")
+    assert approvals.approved == {KITCHEN}
+
+    with pytest.raises(SystemExit) as stop:
+        _pair(monkeypatch, devices, FakeApprovals({"ABCD2345": DESK}), yes=True, device="hg-0000000000000000")
+    assert "is not waiting to pair" in str(stop.value)

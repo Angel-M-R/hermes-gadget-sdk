@@ -29,9 +29,13 @@ assets/mascot/          The mascot master image and its attribution
 
 The Python jobs in `.github/workflows/ci.yml` run under `xvfb-run` so the desktop controls run against the simulator core and development hub. On a headless Linux machine, use `xvfb-run -a pytest`. Without a display, the window tests skip; set `HERMES_GADGET_UI_TESTS=1` to require them.
 
-CI runs the adapter and gateway suites in `.github/workflows/hermes.yml`: against the Hermes commit pinned there (`HERMES_REF`) on every push and pull request, and against Hermes `main` once a day. To move the pin, run that workflow by hand with `hermes_ref: main`. When it passes, put the commit it printed into `HERMES_REF` and the README's status line.
+CI runs the adapter and gateway suites in `.github/workflows/hermes.yml`: against the Hermes commit pinned there (`HERMES_REF`) on every push and pull request, and against Hermes `main` once a day. To move the pin, run that workflow by hand with `hermes_ref: main`. When it passes, put the commit it printed into `HERMES_REF` and into `TESTED_HERMES_COMMIT` in `plugin/compat.py`; a test checks that the two agree.
 
-The Linux jobs run on `ubuntu-24.04` rather than `ubuntu-latest`, so a new runner image arrives as a deliberate change instead of a surprise. Dependabot proposes the workflows' actions, the installer's npm packages and the Python dependencies weekly, a week after each release.
+The Raspberry Pi package installs its runtime dependencies from `linux/requirements.txt`, a lock with hashes compiled from `linux/requirements.in` (the `[audio,gpio]` extras). Change the extras in `pyproject.toml` and `requirements.in` together, then regenerate the lock as the file's header says; Dependabot proposes updates to it weekly.
+
+The Linux jobs run on `ubuntu-24.04` rather than `ubuntu-latest`, so a new runner image arrives as a deliberate change instead of a surprise. Every action is pinned to a commit, with the release tag in a comment, and PlatformIO to a version, so a job runs the same code until a change says otherwise. Every job has a timeout. Dependabot proposes the workflows' actions (updating the pinned commits), the installer's npm packages and the Python dependencies weekly, a week after each release.
+
+A pull request also needs a line in `CHANGELOG.md` under `## Unreleased`, checked by the `Changelog entry` job. Label the PR `no-changelog` when nothing user-facing changed (internal refactors, test-only fixes, dependency bumps).
 
 The end-to-end test runs a real gateway with the plugin installed and a fake OpenAI-compatible server (`tests/fakes/fake_openai.py`) standing in for the model, STT and TTS. It then:
 
@@ -78,7 +82,7 @@ hermes gateway run
 
 `--link` falls back to copying where symlinks need extra privileges (Windows without Developer Mode). Re-run the install after editing in that case.
 
-The plugin declares the speech engine for its branch's voice as a Python dependency. Enable it through `hermes plugins enable gadget` so Hermes prepares that dependency with its other packages, then restart the gateway in Hermes's selected environment. Writing `plugins.enabled` directly does not install the engine. Run `hermes gateway setup` and choose Hermes Gadget to configure the platform and apply the branch's TTS provider and voice. Each setup run overwrites those speech settings, including in existing installations. A firmware flash alone does not set host speech preferences.
+Run `hermes gateway setup` and choose Hermes Gadget to configure the platform. Setup preserves Hermes's TTS provider and voice; install the selected speech engine in the gateway environment through Hermes's speech setup. A firmware flash does not change host speech preferences. Optional per-device TTS overrides rely on additional hooks listed in `plugin/compat.py`.
 
 ## Working on the firmware
 
@@ -107,9 +111,9 @@ It also writes `SHA256SUMS` and `manifest.json`, which tells the browser install
 
 To publish a release:
 
-1. Set the new version in all four files that carry it: `PROJECT_VER` in `firmware/esp32/CMakeLists.txt`, `pyproject.toml`, `python/hermes_gadget/__init__.py` and `plugin/plugin.yaml`. `python tools/check_versions.py` says whether they agree, and CI fails when they don't.
-2. Merge, then push a tag: `git tag v0.2.0 && git push origin v0.2.0`.
-3. The **Release** workflow checks the four files against the tag, builds every board in `platformio.ini`, and publishes the files as a GitHub release. Its notes include the command that installs the plugin from the same commit (`hermes plugins install … --ref <commit>`).
+1. Set the new version in all four files that carry it: `PROJECT_VER` in `firmware/esp32/CMakeLists.txt`, `pyproject.toml`, `python/hermes_gadget/__init__.py` and `plugin/plugin.yaml`, and move the `## Unreleased` entries in `CHANGELOG.md` under a `## <version>` heading. `python tools/check_versions.py --tag v<version>` says whether they agree and the section exists.
+2. Merge, wait for CI and the Hermes run to pass on `main`, then tag that commit: `git tag v0.2.0 && git push origin v0.2.0`.
+3. The **Release** workflow refuses a commit without successful CI and Hermes runs, checks the four files and the changelog against the tag, builds every board in `platformio.ini`, and publishes the files as a GitHub release. Its notes open with the changelog section and include the command that installs the plugin from the same commit (`hermes plugins install … --ref <commit>`).
 
 To package local builds: `pio run && python tools/package_release.py --all --out dist`.
 

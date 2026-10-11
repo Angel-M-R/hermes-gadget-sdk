@@ -241,6 +241,11 @@ Ui::Ui(Display& display, bool touch_screen) : display_(display), panel_(display.
   bar_pad_ = corner ? 3 * s : 0;
   layout_.top_h = Canvas::line_height(s) + 2 * s + bar_pad_;
   layout_.bottom_h = layout_.top_h;
+  if (panel_.round) {
+    const int dot_r = std::max(2, 3 * s / 2 + 1);
+    layout_.top_h = std::max(36, 2 * dot_r + 14 * s);
+  }
+  layout_.title_w = panel_.round ? std::min(w, 120 * s) : w;
   if (touch_screen) layout_.bottom_h = std::max(layout_.bottom_h, std::min(40, h / 4));
   if (corner) {
     top_inset_ = corner_cut(corner, s + bar_pad_) + s;
@@ -286,6 +291,7 @@ void Ui::render(const UiModel& m) {
     panel.fill_rect(0, 0, panel_.width, panel_.height, bg_);
     display_.flush(0, panel_.height);
   }
+  if (panel_.round) draw_round_battery(m);
   Canvas c = canvas();
   const int y_header = layout_.top_h;
   const int y_content = y_header + layout_.header_h;
@@ -296,7 +302,9 @@ void Ui::render(const UiModel& m) {
   speaker_in_header_ = speaker && !m.hero;
 
   uint32_t hashes[4];
-  hashes[0] = Hash().add(m.title).val(m.link).val(m.battery).val(m.charging).val(m.usb_power).val(m.language).get();
+  hashes[0] = Hash().add(m.title).val(m.link).val(m.battery).val(m.battery_charging)
+                  .val(m.battery_icon).val(m.battery_text).val(m.battery_low).val(m.usb_power).val(m.language)
+                  .val(panel_.round && m.screen == Screen::Settings).val(panel_.round && m.settings_hold).get();
   hashes[1] = Hash()
                   .val(m.screen)
                   .add(m.headline)
@@ -308,7 +316,7 @@ void Ui::render(const UiModel& m) {
                   .val(m.speaker_pressed)
                   .get();
   hashes[2] =
-      Hash().val(m.screen).add(m.detail).add(m.body).add(m.qr).add(m.code).val(m.scroll).val(m.color_test)
+      Hash().val(m.screen).add(m.detail).add(m.body).val(m.qr ? m.qr->size : 0).add(m.code).val(m.scroll).val(m.color_test)
             .val(m.volume).val(m.muted).val(m.large_text).val(m.language).get();
   hashes[3] = Hash().add(m.hint).val(m.reading).val(m.screen).val(m.language)
                   .val(m.reading != Reading::None ? hashes[2] : 0u).get();
@@ -400,42 +408,86 @@ void Ui::draw_top(Canvas& c, const UiModel& m) {
   label = localized(label, m.language);
   int ty = s + bar_pad_;
   if (panel_.round) {
-    // A round face stays quiet: just the link dot, centred, like a watch's status mark.
+    // The settings hold target: a dim label under the link dot, with no bar
+    // behind it. The label line (2r + 4s .. 2r + 13s) fits the band.
     int r = std::max(2, 3 * s / 2 + 1);
-    c.fill_circle(w / 2, layout_.top_h / 2, r, dot);
+    if (m.settings_hold) {
+      const char* control = localized(m.screen == Screen::Settings ? "BACK TO HERMES" : "SETTINGS", m.language);
+      c.text((w - Canvas::text_width(control, s)) / 2, 2 * r + 4 * s, control, s, kDim);
+    }
+    c.fill_circle(w / 2, s + r, r, dot);
     return;
   }
+  const int pad = 3 * s + std::max<int>(panel_.corner_inset, top_inset_);
   int label_w = Canvas::text_width(label, s);
-  int label_x = w - 3 * s - top_inset_ - label_w;
+  int label_x = w - pad - label_w;
   c.text(label_x, ty, label, s, kDim);
   int r = std::max(2, 3 * s / 2 + 1);
+  const int dot_x = label_x - 3 * s - r;
   const int text_mid = ty + font::kGlyphHeight * s / 2;
-  c.fill_circle(label_x - 3 * s - r, text_mid, r, dot);
-  int left_of = label_x - 6 * s - 2 * r;  // where the next item must end
-
-  // Battery: an outline filled to the charge, then the percentage; "USB" on mains with no battery.
-  if (m.battery >= 0 || m.usb_power) {
-    const bool low = m.battery >= 0 && m.battery <= 15 && !m.charging;
-    const uint16_t tone = m.charging ? kGreen : low ? kRed : kDim;
-    std::string pct = m.battery >= 0 ? std::to_string(m.battery) + "%" : "USB";
-    int tx = left_of - Canvas::text_width(pct, s);
-    c.text(tx, ty, pct, s, tone);
-    left_of = tx - 2 * s;
-    if (m.battery >= 0) {
-      const int bh = 7 * s, bw = 11 * s, nub = std::max(1, s);
-      const int bx = left_of - nub - bw, by = text_mid - bh / 2;
-      c.rect(bx, by, bw, bh, kDim);
-      c.fill_rect(bx + bw, by + bh / 3, nub, bh - 2 * (bh / 3), kDim);
-      const int inner = bw - 2 * s - (s > 1 ? 1 : 0);
-      const int fill = std::max(m.battery > 0 ? 1 : 0, inner * m.battery / 100);
-      c.fill_rect(bx + s, by + s, fill, bh - 2 * s, tone == kDim ? kText : tone);
-      left_of = bx - 3 * s;
-    } else {
-      left_of -= s;
-    }
+  c.fill_circle(dot_x, text_mid, r, dot);
+  int title_end = dot_x - r;
+  if (m.battery >= 0) {
+    title_end -= 4 * s + battery_width(m);
+    draw_battery(c, m, title_end, text_mid);
+  } else if (m.usb_power) {
+    title_end -= 4 * s + Canvas::text_width("USB", s);
+    c.text(title_end, ty, "USB", s, kDim);
   }
-  int title_cols = cols_for(left_of - 3 * s - top_inset_, s);
-  c.text(3 * s + top_inset_, ty, fit(m.title, title_cols), s, kText);
+  int title_cols = cols_for(title_end - 3 * s - pad, s);
+  c.text(pad, ty, fit(m.title, title_cols), s, kText);
+}
+
+// Round panels: the battery is centred at the very top of the panel, above the UI
+// square, as high as the circle leaves it room plus a small margin.
+void Ui::draw_round_battery(const UiModel& m) {
+  const int s = layout_.scale;
+  const int bh = 7 * s;  // the taller of the icon (5s + 1) and the text (7s)
+  const int hw = (m.battery >= 0 ? battery_width(m) : 0) / 2 + 2 * s;
+  const int radius = panel_.width / 2;
+  int y0 = 0;
+  // The first row where the strip's top corners lie inside the circle.
+  while (y0 < oy_ && (radius - y0) * (radius - y0) + hw * hw > radius * radius) ++y0;
+  y0 = std::min(y0 + 3 * s, std::max(0, oy_ - bh));
+  const int y1 = std::min<int>(oy_, y0 + bh);
+  const uint32_t key = Hash().val(m.battery).val(m.battery_charging).val(m.battery_low).val(m.battery_icon)
+                           .val(m.battery_text).val(y0).get();
+  if (valid_ && key == battery_hash_) return;
+  battery_hash_ = key;
+  Canvas panel(display_.framebuffer(), panel_.width, panel_.height, panel_.swap_bytes);
+  // Clear the band the strip can occupy at any level, so a shorter or hidden strip leaves nothing behind.
+  panel.fill_rect(0, 0, panel_.width, oy_, bg_);
+  if (m.battery >= 0) draw_battery(panel, m, (panel_.width - battery_width(m)) / 2, (y0 + y1) / 2);
+  display_.flush(0, static_cast<uint16_t>(oy_));
+}
+
+int Ui::battery_width(const UiModel& m) const {
+  const int s = layout_.scale;
+  const int icon = m.battery_icon ? 10 * s : 0;
+  const int text = m.battery_text ? Canvas::text_width(std::to_string(m.battery) + "%", s) : 0;
+  return icon + text + (icon && text ? 2 * s : 0);
+}
+
+// A battery outline with a terminal nub, filled to the level, then the percent.
+void Ui::draw_battery(Canvas& c, const UiModel& m, int x, int cy) {
+  const int s = layout_.scale;
+  if (m.battery_icon) {
+    const int bw = 9 * s, bh = 5 * s + 1, t = std::max(1, s / 2);
+    const int y = cy - bh / 2;
+    const uint16_t fill = m.battery_charging ? kGreen : m.battery_low ? kRed : kText;
+    c.fill_rect(x, y, bw, bh, kDim);
+    c.fill_rect(x + t, y + t, bw - 2 * t, bh - 2 * t, panel_.round ? bg_ : bar_);
+    c.fill_rect(x + bw, cy - s, s, 2 * s, kDim);
+    const int inner = bw - 4 * t;
+    const int level = std::max(m.battery > 0 ? 1 : 0, inner * std::min<int>(m.battery, 100) / 100);
+    c.fill_rect(x + 2 * t, y + 2 * t, level, bh - 4 * t, fill);
+    x += 12 * s;
+  }
+  if (m.battery_text) {
+    // Without the icon, the text itself turns green while charging.
+    const uint16_t col = m.battery_charging ? (m.battery_icon ? kDim : kGreen) : m.battery_low ? kRed : kDim;
+    c.text(x, cy - (font::kGlyphHeight * s) / 2, std::to_string(m.battery) + "%", s, col);
+  }
 }
 
 void Ui::draw_indicator(Canvas& c, const UiModel& m, int cx, int cy, int r) {
@@ -567,6 +619,8 @@ void Ui::draw_content(Canvas& c, const UiModel& m) {
     return;
   }
 
+  if (m.qr && m.qr->ok() && draw_qr(c, m, y0, y1)) return;
+
   if (m.screen == Screen::Boot) {
     int big = s + 2;
     const char* name = "HERMES";
@@ -593,7 +647,6 @@ void Ui::draw_content(Canvas& c, const UiModel& m) {
     }
   }
   if (m.body.empty() || rows <= 0) return;
-  if (!m.qr.empty() && draw_qr_body(c, m, y, y1)) return;
 
   auto lines = wrap_text(m.body, layout_.body_cols);
   int total = static_cast<int>(lines.size());
@@ -613,71 +666,47 @@ void Ui::draw_content(Canvas& c, const UiModel& m) {
   }
 }
 
-bool Ui::draw_qr_body(Canvas& c, const UiModel& m, int top, int bottom) {
-  if (m.qr != qr_text_) {
-    qr_text_ = m.qr;
-    qr_ = QrCode::encode(m.qr);
-  }
-  if (!qr_.size()) return false;
-  const int s = layout_.scale, margin = 4 * s;
-  const int quiet = 2;  // light modules around the code; the screen beyond is dark
-  const int n = qr_.size() + 2 * quiet;
-  const int avail_w = info_.width - 2 * margin, avail_h = bottom - margin - top;
-  // A word must not break across lines: the setup address is one long word.
-  int longest = 0, word = 0;
-  const std::string words = m.body + " ";
-  size_t offset = 0;
-  while (offset < words.size()) {
-    const uint32_t ch = next_character(words, offset);
-    if (ch == ' ' || ch == '\n') word = 0;
-    else longest = std::max(longest, ++word);
-  }
-  struct Fit {
-    int module = 0, scale = 1;
-    bool beside = false;
-    std::vector<std::string> lines;
-  } fit;
-  // Under: the code above the text, which keeps the body's size.
-  if (longest <= layout_.body_cols) {
-    fit.lines = wrap_text(m.body, layout_.body_cols);
-    const int text_h = static_cast<int>(fit.lines.size()) * Canvas::line_height(s);
-    fit.module = std::max(0, std::min(avail_w, avail_h - text_h - margin)) / n;
-    fit.scale = s;
-  }
-  // Beside: the code at the left, the text at its right, smaller if it must be.
-  const int beside = std::min(avail_h, avail_w / 2) / n;
-  for (int ts = s; ts >= 1 && beside > fit.module; --ts) {
-    const int cols = cols_for(avail_w - beside * n - margin, ts);
-    if (cols < longest) continue;
-    auto lines = wrap_text(m.body, cols);
-    if (static_cast<int>(lines.size()) * Canvas::line_height(ts) > avail_h) continue;
-    fit = {beside, ts, true, std::move(lines)};
-  }
-  if (fit.module < 2) return false;
+// A Wi-Fi setup code: a white panel with a four-module quiet zone, one square
+// per module, at the largest integer scale that fits the content band. A phone
+// camera needs the quiet zone and dark-on-light contrast, so neither is optional.
+// Returns false, drawing nothing, when the code does not fit beside the text.
+bool Ui::draw_qr(Canvas& c, const UiModel& m, int y0, int y1) {
+  const int n = m.qr->size;
+  const int w = info_.width;
+  const int s = layout_.scale;
+  const int lh = Canvas::line_height(s);
+  const int margin = 4 * s;
+  const int pad = 4;                     // quiet zone, in modules
+  const int cells = n + 2 * pad;         // the code plus its quiet zone
+  const int avail_h = y1 - y0 - 2 * margin;
 
-  const int side = fit.module * n, lh = Canvas::line_height(fit.scale);
-  const int text_h = static_cast<int>(fit.lines.size()) * lh;
-  int qx, qy, tx, ty;
-  if (fit.beside) {
-    qx = margin;
-    qy = top + (avail_h - side) / 2;
-    tx = qx + side + margin;
-    ty = top + (avail_h - text_h) / 2;
-  } else {
-    qx = (info_.width - side) / 2;
-    qy = top + (avail_h - side - margin - text_h) / 2;
-    tx = margin;
-    ty = qy + side + margin;
-  }
-  c.fill_rect(qx, qy, side, side, rgb565(255, 255, 255));
-  for (int y = 0; y < qr_.size(); ++y) {
-    for (int x = 0; x < qr_.size(); ++x) {
-      if (qr_.dark(x, y))
-        c.fill_rect(qx + (x + quiet) * fit.module, qy + (y + quiet) * fit.module, fit.module, fit.module, 0);
+  // The code only joins the network: the phone still needs the address, and a
+  // phone that cannot scan needs the name and password. So every line of the
+  // instructions stays on screen, and the code is shown only where it fits
+  // beside them at kMinScale or larger, below which it is not reliably
+  // scannable. Otherwise the caller draws the text-only screen.
+  constexpr int kMinScale = 3;
+  const std::vector<std::string> lines = wrap_text(m.body, layout_.body_cols);
+  const int text_rows = static_cast<int>(lines.size());
+  const int reserve = text_rows ? text_rows * lh + 2 * s : 0;
+  const int scale = std::min((w - 2 * margin) / cells, (avail_h - reserve) / cells);
+  if (scale < kMinScale) return false;
+
+  const int side = cells * scale;
+  const int x0 = (w - side) / 2;
+  const int block = side + reserve;
+  const int py0 = y0 + margin + std::max(0, (avail_h - block) / 2);
+  c.fill_rect(x0, py0, side, side, rgb565(255, 255, 255));
+  for (int y = 0; y < n; ++y) {
+    for (int x = 0; x < n; ++x) {
+      if (m.qr->at(x, y)) {
+        c.fill_rect(x0 + (x + pad) * scale, py0 + (y + pad) * scale, scale, scale, rgb565(0, 0, 0));
+      }
     }
   }
-  for (const auto& line : fit.lines) {
-    c.text(tx, ty, line, fit.scale, kText);
+  int ty = py0 + side + 2 * s;
+  for (int i = 0; i < text_rows; ++i) {
+    c.text((w - Canvas::text_width(lines[static_cast<size_t>(i)], s)) / 2, ty, lines[static_cast<size_t>(i)], s, kDim);
     ty += lh;
   }
   return true;

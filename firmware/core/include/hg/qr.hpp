@@ -1,30 +1,41 @@
-// QR codes (ISO/IEC 18004) for short texts such as a Wi-Fi network's join
-// code: byte mode, error correction level M, versions 1 to 6, so up to 106
-// bytes. Portable and deterministic, like the rest of the UI.
+// Wi-Fi setup QR payloads, backed by the vendored ricmoo/QRCode encoder.
+//
+// The device shows a QR code on the Wi-Fi setup screen so a phone camera can
+// join the gadget's temporary network without typing the SSID and password.
+// The payload uses the de-facto "WIFI:" scheme that Android and iOS both read.
 #pragma once
 
 #include <cstdint>
+#include <string>
 #include <string_view>
 #include <vector>
 
-namespace hg {
+namespace hg::qr {
 
-class QrCode {
- public:
-  // Encodes `text` with the given mask (0..7), or with the mask that scores
-  // best when `mask` is -1. Returns an empty code (size() 0) when the text is
-  // longer than a version 6 code holds.
-  static QrCode encode(std::string_view text, int mask = -1);
+// The largest matrix this build encodes (see QRCODE_MAX_VERSION). Version 12 is
+// 65x65 modules, far more than a Wi-Fi payload needs.
+constexpr int kMaxVersion = 12;
 
-  // Modules per side, without the quiet zone; 0 for an empty code.
-  int size() const { return size_; }
-  int version() const { return version_; }
-  int mask() const { return mask_; }
-  bool dark(int x, int y) const { return dark_[static_cast<size_t>(y * size_ + x)] != 0; }
+// A rendered module matrix: `size` x `size` bits, row-major, true = dark.
+struct Code {
+  int size = 0;
+  std::vector<uint8_t> modules;  // one byte per module, 0 or 1
 
- private:
-  int size_ = 0, version_ = 0, mask_ = 0;
-  std::vector<uint8_t> dark_;
+  bool ok() const { return size > 0; }
+  bool at(int x, int y) const { return modules[static_cast<size_t>(y) * size + x] != 0; }
 };
 
-}  // namespace hg
+// Builds the QR payload for a WPA/WPA2 network:
+//   WIFI:T:WPA;S:<ssid>;P:<password>;;
+// `;`, `,`, `:`, `\` and `"` are backslash-escaped as the scheme requires.
+// An empty password yields an open-network payload (T:nopass).
+std::string payload(std::string_view ssid, std::string_view password);
+
+// Encodes `text` at the given error-correction level, or the lowest version
+// that fits. Returns an empty Code when the text does not fit kMaxVersion.
+Code encode(std::string_view text, int ecc = 1);  // 1 = ECC_MEDIUM
+
+// The smallest version that holds `text`, or 0 when none does.
+int smallest_version(std::string_view text, int ecc = 1);
+
+}  // namespace hg::qr

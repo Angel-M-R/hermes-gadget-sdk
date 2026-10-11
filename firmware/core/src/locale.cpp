@@ -7,6 +7,14 @@ const char* localized(const char* english, Language language) {
   if (language == Language::English) return english;
   static const struct { const char* en; const char* es; } labels[] = {
     {"Controls", "Controles"},
+    {"SETTINGS", "AJUSTES"},
+    {"BACK TO HERMES", "VOLVER A HERMES"},
+    {"Indicator: ", "Indicador: "},
+    {"Icon", "Icono"},
+    {"Percent", "Porcentaje"},
+    {"Both", "Ambos"},
+    {"Tap to change", "Toca para cambiar"},
+    {" to change", " para cambiar"},
     {"Done", "Volver"},
     {"Volume", "Volumen"},
     {"Unavailable", "No disponible"},

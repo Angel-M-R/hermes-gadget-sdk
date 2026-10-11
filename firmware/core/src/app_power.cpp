@@ -31,7 +31,7 @@ void App::darken_display() {
 
 void App::on_power_key() {
   if (!hal_.display || !hal_.display->info().has_backlight) return;
-  if (display_sleeping_) {
+  if (display_sleeping_ || display_dimmed_) {
     wake_display();
     return;
   }
@@ -46,16 +46,21 @@ void App::power_tick() {
     power_status_ = hal_.power->read();
     power_read_at_ = now();
     sensors_dirty_ = true;
-    if (settings_open()) update_model();
+    update_model();
+  }
+  constexpr uint32_t kPowerKeyPollMs = 100;
+  if (hal_.power && now() - power_key_polled_at_ >= kPowerKeyPollMs) {
+    power_key_polled_at_ = now();
+    if (hal_.power->take_key_press()) on_power_key();
   }
   if (!hal_.display || !hal_.display->info().has_backlight) return;
   if (display_off_by_user_) {
     // Off stays off through replies; a question or an update still shows.
-    if (prompt_showing() || ota_busy() || ota_ == Ota::Restarting) wake_display();
+    if (prompt_showing() || ota_busy() || ota_ == Ota::Restarting || phase_ != Phase::Online) wake_display();
     return;
   }
   if (!screen_timeout_ms_) return;
-  const bool idle = mode_ == Mode::Idle && !speaking() && !settings_open() && !quick_controls_open_ && !talk_held_ && !cancel_held_ &&
+  const bool idle = mode_ == Mode::Idle && !speaking() && !quick_controls_open_ && !talk_held_ && !cancel_held_ &&
                     !prompt_showing() && wifi_setup_text_.empty() && !ota_busy() && ota_ != Ota::Restarting && overlay_ == Overlay::None &&
                     (phase_ == Phase::NoNetwork || (phase_ == Phase::Online && paired_));
   if (!idle) { wake_display(); return; }

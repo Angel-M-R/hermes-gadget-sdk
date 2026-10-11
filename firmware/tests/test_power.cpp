@@ -33,7 +33,13 @@ TEST("AXP2101: battery, USB and charging readings never alter power configuratio
   CHECK(writes.empty());
 
   regs[0xa4] = 255;
-  CHECK(!power.read()->battery_percent);
+  CHECK_EQ(power.read()->battery_percent, uint8_t(77));  // junk gauge falls back to the voltage curve (4000 mV -> 77)
+  regs[0xa4] = 0;
+  p = power.read();
+  CHECK_EQ(p->battery_percent, uint8_t(77));  // gauge stuck at 0: honest percent from voltage, no false "low battery"
+  regs[0x34] = 0x0d;  // 3549 mV -> 27% on the 3300..4200 map
+  regs[0x35] = 0xdd;
+  CHECK_EQ(power.read()->battery_percent, uint8_t(27));
   regs[0x00] = 0x20;
   p = power.read();
   CHECK(p->battery_present == false);
@@ -48,6 +54,11 @@ TEST("AXP2101: battery, USB and charging readings never alter power configuratio
   CHECK(writes.empty());
   failed_reg = 0x00;
   CHECK(!power.read());
+  regs[0x00] = 0x28;
+  regs[0x18] = 0x0a;
+  regs[0x30] = 0x03;
+  failed_reg = 0xa4;
+  CHECK(!power.read());  // a gauge the bus can't read is unavailable, not estimated from voltage
   failed_reg = 0x10;
   CHECK(!power.power_off());
   CHECK(writes.empty());
@@ -98,24 +109,24 @@ TEST("AXP2101: the power key's short press is enabled without touching rails and
         else regs[reg] = value;
         return true;
       });
-  CHECK(power.enable_power_key());
+  CHECK(power.enable_key_press());
   CHECK_EQ(writes.size(), size_t(2));
   CHECK_EQ(writes[0].first, uint8_t(0x41));
   CHECK_EQ(writes[0].second, uint8_t(0x48));
   CHECK_EQ(writes[1].first, uint8_t(0x49));
-  CHECK(!power.take_short_press());  // the stale press was cleared
+  CHECK(!power.take_key_press());  // the stale press was cleared
   regs[0x49] = 0x0c;                 // short and long press latched together
-  CHECK(power.take_short_press());
+  CHECK(power.take_key_press());
   CHECK_EQ(regs[0x49], uint8_t(0x04));  // only the short press is cleared
-  CHECK(!power.take_short_press());
+  CHECK(!power.take_key_press());
   // A press whose latch can't be cleared isn't reported, or every poll would repeat it.
   regs[0x49] = 0x08;
   clear_fails = true;
-  CHECK(!power.take_short_press());
-  CHECK(!power.take_short_press());
+  CHECK(!power.take_key_press());
+  CHECK(!power.take_key_press());
   clear_fails = false;
-  CHECK(power.take_short_press());
-  CHECK(!power.take_short_press());
+  CHECK(power.take_key_press());
+  CHECK(!power.take_key_press());
   for (const auto& w : writes) CHECK(w.first == 0x41 || w.first == 0x49);
 }
 
@@ -174,4 +185,59 @@ TEST("CoreS3: failed power access stops initialization without releasing reset")
   CHECK_EQ(delays, 0);
   CHECK(!control.set_brightness(100));
   CHECK_EQ(writes, 2);
+}
+
+TEST("AXP2101: the power key's short press is read once and cleared; enabling touches only interrupts") {
+  std::array<uint8_t, 256> regs{};
+  regs[0x41] = 0x40;  // another interrupt already enabled
+  regs[0x49] = 0x08;  // a press from before boot
+  bool fail_reads = false;
+  std::vector<std::pair<uint8_t, uint8_t>> writes;
+  hg::Axp2101 power(
+      [&](uint8_t reg, uint8_t* out, size_t n) {
+        if (fail_reads) return false;
+        for (size_t i = 0; i < n; ++i) out[i] = regs[reg + i];
+        return true;
+      },
+      [&](uint8_t reg, uint8_t value) {
+        writes.emplace_back(reg, value);
+        if (reg == 0x49) regs[reg] = static_cast<uint8_t>(regs[reg] & ~value);  // write 1 to clear
+        else regs[reg] = value;
+        return true;
+      });
+  CHECK(power.enable_key_press());
+  CHECK_EQ(writes.size(), size_t(2));
+  CHECK(writes[0] == std::make_pair(uint8_t(0x41), uint8_t(0x48)));  // short press added, the rest kept
+  CHECK(writes[1] == std::make_pair(uint8_t(0x49), uint8_t(0x08)));  // the old press is dropped
+  CHECK(!power.take_key_press());
+
+  writes.clear();
+  regs[0x49] = 0x0c;  // short press, plus a long press that isn't ours to clear
+  CHECK(power.take_key_press());
+  CHECK(!power.take_key_press());
+  CHECK_EQ(writes.size(), size_t(1));
+  CHECK(writes[0] == std::make_pair(uint8_t(0x49), uint8_t(0x08)));
+  CHECK_EQ(regs[0x49], uint8_t(0x04));
+
+  regs[0x49] = 0x08;
+  fail_reads = true;
+  CHECK(!power.take_key_press());  // a failed read is no press
+  CHECK(!power.enable_key_press());
+}
+
+TEST("AXP2101: external power is read from VBUS good, and a failed read is unknown") {
+  uint8_t status = 0x20;
+  bool fail = false;
+  hg::Axp2101 power(
+      [&](uint8_t reg, uint8_t* out, size_t n) {
+        if (fail || reg != 0x00 || n != 1) return false;
+        *out = status;
+        return true;
+      },
+      [&](uint8_t, uint8_t) { return false; });
+  CHECK(power.vbus_good() == std::optional<bool>(true));
+  status = 0x08;  // battery present, no VBUS
+  CHECK(power.vbus_good() == std::optional<bool>(false));
+  fail = true;
+  CHECK(!power.vbus_good().has_value());
 }
