@@ -36,7 +36,8 @@ constexpr uint32_t kOtaRestartMs = 1000;    // time for ota.done to leave before
 constexpr uint32_t kBackoffMs[] = {1000, 2000, 4000, 8000, 15000, 30000};
 constexpr size_t kBackoffSteps = sizeof(kBackoffMs) / sizeof(kBackoffMs[0]);
 
-const char* const kSettingKeys[] = {"name", "server", "token", "talk_mode", "volume", "brightness", "screen_timeout", "wifi_ssid", "wifi_pass", "mute"};
+const char* const kSettingKeys[] = {"name", "server", "token", "talk_mode", "volume", "brightness", "screen_timeout", "wifi_ssid", "wifi_pass", "mute",
+                                  "end_silence_ms", "recording_cues", "text_size", "language"};
 
 bool is_secret(std::string_view key) { return key == "token" || key == "wifi_pass"; }
 
@@ -99,6 +100,13 @@ void App::load_settings() {
   server_url_ = setting("server", profile_.default_server_url);
   access_token_ = setting("token", profile_.default_access_token);
   talk_mode_ = setting("talk_mode", "hold") == "tap" ? TalkMode::Tap : TalkMode::Hold;
+  end_silence_ms_ = static_cast<uint32_t>(std::max(400, std::min(3000, std::atoi(setting("end_silence_ms", "900").c_str()))));
+  recording_cues_ = setting("recording_cues", "0") == "1";
+  language_ = setting("language", "en") == "es" ? Language::Spanish : Language::English;
+  const bool large = setting("text_size", "normal") == "large";
+  if (large != large_text_) { scroll_ = 0; card_scroll_ = 0; }
+  large_text_ = large;
+  if (ui_) ui_->set_large_text(large_text_);
   int vol = std::atoi(setting("volume", "70").c_str());
   volume_ = static_cast<uint8_t>(std::max(0, std::min(100, vol)));
   muted_ = setting("mute", "0") == "1";
@@ -188,7 +196,8 @@ void App::begin() {
     add_action(std::move(bl));
   }
 
-  if (hal_.display) ui_ = std::make_unique<Ui>(*hal_.display);
+  if (hal_.display) ui_ = std::make_unique<Ui>(*hal_.display, profile_.touch_screen);
+  if (ui_) ui_->set_large_text(large_text_);
   phase_ = Phase::Boot;
   phase_since_ = now();
   boot_until_ = now() + kBootScreenMs;
@@ -231,7 +240,7 @@ void App::on_network(bool up, std::string_view detail) {
 void App::connect_now() {
   reconnect_pending_ = false;
   if (server_url_.empty()) {
-    fatal_ = "No Hermes server configured";
+    fatal_ = tr("No Hermes server configured");
     phase_ = Phase::NoNetwork;
     update_model();
     return;
@@ -255,6 +264,8 @@ void App::schedule_reconnect() {
 }
 
 void App::drop_session(std::string_view reason) {
+  reading_paused_ = false;
+  quick_controls_open_ = false;
   last_close_ = std::string(reason);
   if (ota_busy()) {
     if (ota_ == Ota::Receiving) hal_.updater->abort();
@@ -301,7 +312,7 @@ void App::send_hello() {
   if (hal_.display) {
     DisplayInfo di = hal_.display->info();
     json::Value d = json::Value::object();
-    d.set("width", di.width).set("height", di.height).set("color", true).set("charset", "ascii");
+    d.set("width", di.width).set("height", di.height).set("color", true).set("charset", "utf8-es");
     if (di.round) d.set("shape", "round");
     if (ui_) {
       const UiLayout& l = ui_->layout();
@@ -421,7 +432,7 @@ void App::h_paired(const json::Value&) {
   paired_ = true;
   pairing_code_.clear();
   pairing_command_.clear();
-  set_hint_flash("Paired with Hermes");
+  set_hint_flash(tr("Paired with Hermes"));
 }
 
 void App::h_unpaired(const json::Value&) {
@@ -436,6 +447,7 @@ void App::h_unpaired(const json::Value&) {
 bool App::can_talk() const { return phase_ == Phase::Online && paired_ && ota_ != Ota::Receiving; }
 
 void App::h_turn_start(const json::Value& m) {
+  reading_paused_ = false;
   wake_for_activity();
   active_turn_ = m["turn"].as_string();
   turn_done_ = false;
@@ -458,7 +470,7 @@ void App::h_turn_end(const json::Value& m) {
   turn_done_ = true;
   last_turn_rx_ = now();
   if (m["outcome"].as_string() == "failure" && reply_.empty()) {
-    notice_ = "Hermes could not complete that request";
+    notice_ = tr("Hermes could not complete that request");
     notice_until_ = now() + 8000;
   }
   if (mode_ == Mode::Thinking) {
@@ -476,7 +488,7 @@ void App::h_transcript(const json::Value& m) {
   // What speech-to-text heard; shown as the user's line while Hermes works.
   user_echo_ = m["text"].as_string();
   last_turn_rx_ = now();
-  if (status_ == "Sending...") status_.clear();
+  if (status_ == tr("Sending...")) status_.clear();
 }
 
 void App::h_reply_delta(const json::Value& m) {
@@ -502,6 +514,7 @@ void App::h_reply(const json::Value& m) {
   if (mode_ == Mode::Listening) return;
   reply_ = text;
   reply_final_ = true;
+  reading_paused_ = false;
   scroll_ = 0;  // a finished reply is read from the top
   page_at_ = now() + page_dwell_ms();
   status_.clear();
@@ -544,6 +557,7 @@ void App::h_audio_abort(const json::Value& m) {
 }
 
 void App::stop_playback() {
+  recording_cue_pending_ = false;
   if (hal_.speaker && (in_stream_ >= 0 || hal_.speaker->busy())) hal_.speaker->abort();
   in_stream_ = -1;
 }
@@ -640,6 +654,7 @@ void App::h_image_end(const json::Value& m) {
 }
 
 void App::h_prompt(const json::Value& m) {
+  quick_controls_open_ = false;
   close_wifi_setup();
   wake_display();
   if (settings_open()) close_settings();
@@ -672,7 +687,7 @@ void App::answer_prompt(bool yes) {
   send(reply);
   clear_prompt();
   last_turn_rx_ = now();  // Hermes resumes the turn from here
-  set_hint_flash(yes ? "Answered: yes" : "Answered: no");
+  set_hint_flash(yes ? tr("Answered: yes") : tr("Answered: no"));
 }
 
 void App::clear_prompt() {
@@ -733,6 +748,10 @@ void App::h_error(const json::Value& m) {
 // Input
 
 void App::on_button(Button button, bool pressed) {
+  if (quick_controls_open_) {
+    if (button == Button::Cancel && !pressed) close_quick_controls();
+    return;
+  }
   if (!wifi_setup_text_.empty()) {
     if (button == Button::Cancel && !pressed) close_wifi_setup();
     return;
@@ -772,7 +791,7 @@ void App::on_button(Button button, bool pressed) {
         }
         if (cancel_held_) return;  // wait for the local settings chord
         if (!can_talk()) {
-          set_hint_flash(phase_ == Phase::Online ? "Approve pairing first" : "Not connected to Hermes");
+          set_hint_flash(phase_ == Phase::Online ? tr("Approve pairing first") : tr("Not connected to Hermes"));
           return;
         }
         if (mode_ == Mode::Listening) {
@@ -812,7 +831,11 @@ void App::on_button(Button button, bool pressed) {
       } else if (mode_ == Mode::Listening) cancel_listening("cancelled");
       else if (overlay_ != Overlay::None) dismiss_overlay();
       else if (mode_ == Mode::Thinking || mode_ == Mode::Responding) cancel_turn();
-      if (hint_flash_.rfind("New session in", 0) == 0) hint_flash_until_ = now();
+      else if (reading_paused_) {
+        reading_paused_ = false;
+        reply_until_ = now();
+      }
+      if (hint_flash_.rfind(tr("New session in "), 0) == 0) hint_flash_until_ = now();
       break;
     case Button::Up:
     case Button::Down:
@@ -843,9 +866,9 @@ void App::on_speaker_button(SpeakerTouch touch) {
     muted_ = !muted_;
     if (hal_.storage) hal_.storage->set("mute", muted_ ? "1" : "0");
     apply_volume();
-    set_hint_flash(muted_ ? "Speaker off" : "Speaker on");
+    set_hint_flash(muted_ ? tr("Speaker off") : tr("Speaker on"));
   } else if (touch == SpeakerTouch::Tap) {
-    set_hint_flash(muted_ ? "Hold the speaker to unmute" : "Hold the speaker to mute");
+    open_quick_controls();
   }
   update_model();
 }
@@ -854,11 +877,39 @@ void App::apply_volume() {
   if (hal_.speaker) hal_.speaker->set_volume(muted_ ? 0 : volume_);
 }
 
+ReadingControl App::reading_control_hit(int x, int y) const {
+  return ui_ && !display_sleeping_ ? ui_->reading_hit(model_, x, y) : ReadingControl::None;
+}
+
+void App::on_reading_control(ReadingControl control) {
+  // A prompt, settings or another turn may have replaced the reply while the
+  // finger was down. Consuming that touch must never answer or start recording.
+  if (model_.reading == Reading::None || control == ReadingControl::None) return;
+  if ((control == ReadingControl::Recall) != (model_.reading == Reading::Recall)) return;
+  if (wake_display()) return;
+  if (control == ReadingControl::Recall) {
+    scroll_ = 0;
+    reading_paused_ = true;
+  } else if (control == ReadingControl::TogglePause) {
+    reading_paused_ = !reading_paused_;
+  } else {
+    const int step = std::max(1, ui_->body_rows(model_) - 1);
+    scroll_body(control == ReadingControl::Previous ? -step : step);
+    reading_paused_ = true;
+  }
+  // Resuming grants a full page's reading time, and at least the usual time
+  // before returning to the mascot, even after a long pause.
+  page_at_ = now() + page_dwell_ms();
+  reply_until_ = now() + kReplyLingerMs;
+  update_model();
+}
+
 void App::start_listening(bool hands_free) {
+  quick_controls_open_ = false;
   stop_playback();
   dismiss_overlay();
   if (!hal_.mic || !hal_.mic->start(profile_.mic_rate)) {
-    set_hint_flash("Microphone unavailable");
+    set_hint_flash(tr("Microphone unavailable"));
     return;
   }
   hands_free_ = hands_free;
@@ -869,7 +920,10 @@ void App::start_listening(bool hands_free) {
   level_ = 0;
   Vad::Config vc;
   vc.sample_rate = profile_.mic_rate;
+  vc.end_silence_ms = end_silence_ms_;
   vad_.reset(vc);
+  recording_cue_pending_ = play_recording_cue(true);
+  recording_cue_at_ = now();
   json::Value start = proto::message("audio.start");
   start.set("id", request_id_)
       .set("stream", mic_stream_)
@@ -879,6 +933,8 @@ void App::start_listening(bool hands_free) {
   send(start);
   mode_ = Mode::Listening;
   mode_since_ = now();
+  reading_paused_ = false;
+  reply_final_ = false;
   reply_.clear();
   status_.clear();
   user_echo_.clear();
@@ -888,14 +944,15 @@ void App::start_listening(bool hands_free) {
 void App::release_talk(uint32_t released_at) {
   if (released_at - mode_since_ < kMinUtteranceMs) {
     cancel_listening("too short");
-    set_hint_flash(profile_.touch_screen ? "Hold the screen while speaking"
-                                         : "Hold " + profile_.talk_label + " while speaking");
+    set_hint_flash(profile_.touch_screen ? tr("Hold the screen while speaking")
+                                         : tr("Hold ") + profile_.talk_label + tr(" while speaking"));
   } else {
     finish_listening();
   }
 }
 
 void App::finish_listening() {
+  if (recording_cue_pending_) stop_playback();
   if (hal_.mic) hal_.mic->stop();
   json::Value end = proto::message("audio.end");
   end.set("id", request_id_).set("stream", mic_stream_).set("duration_ms", now() - mode_since_);
@@ -903,10 +960,12 @@ void App::finish_listening() {
   mode_ = Mode::Thinking;
   mode_since_ = now();
   last_turn_rx_ = now();
-  status_ = "Sending...";
+  status_ = tr("Sending...");
+  play_recording_cue(false);
 }
 
 void App::cancel_listening(std::string_view why) {
+  if (recording_cue_pending_) stop_playback();
   if (hal_.mic) hal_.mic->stop();
   json::Value c = proto::message("audio.cancel");
   c.set("id", request_id_).set("stream", mic_stream_).set("reason", why);
@@ -916,8 +975,9 @@ void App::cancel_listening(std::string_view why) {
 }
 
 void App::start_new_session() {
+  quick_controls_open_ = false;
   if (!can_talk()) {
-    set_hint_flash("Not connected to Hermes");
+    set_hint_flash(tr("Not connected to Hermes"));
     return;
   }
   if (mode_ == Mode::Listening) cancel_listening("new session");
@@ -925,22 +985,26 @@ void App::start_new_session() {
   dismiss_overlay();
   clear_prompt();
   send(proto::message("session.new"));
+  reading_paused_ = false;
+  reply_final_ = false;
   reply_.clear();
   user_echo_.clear();
-  status_ = "Starting a new session";
+  status_ = tr("Starting a new session");
   scroll_ = -1;
   mode_ = Mode::Thinking;
   mode_since_ = now();
   last_turn_rx_ = now();
-  set_hint_flash("New session");
+  set_hint_flash(tr("New session"));
 }
 
 void App::cancel_turn() {
+  if (reading_paused_) reply_until_ = now();
+  reading_paused_ = false;
   stop_playback();
   send(proto::message("cancel"));
   mode_ = Mode::Idle;
   mode_since_ = now();
-  set_hint_flash("Cancelled");
+  set_hint_flash(tr("Cancelled"));
 }
 
 void App::on_mic_samples(const int16_t* samples, size_t count) {
@@ -950,6 +1014,7 @@ void App::on_mic_samples(const int16_t* samples, size_t count) {
     return;
   }
   if (mode_ != Mode::Listening || count == 0) return;
+  if (recording_cue_pending_) return;  // don't send the local start cue to STT
   level_ = level_percent(rms(samples, count));
   size_t off = 0;
   while (off < count) {
@@ -967,20 +1032,21 @@ void App::on_mic_samples(const int16_t* samples, size_t count) {
       update_model();
     } else if (r == Vad::Result::NoSpeech) {
       cancel_listening("no speech");
-      set_hint_flash("Didn't hear anything");
+      set_hint_flash(tr("Didn't hear anything"));
       update_model();
     }
   }
 }
 
 void App::submit_text(std::string_view text) {
+  quick_controls_open_ = false;
   close_wifi_setup();
   wake_display();
   if (settings_open()) close_settings();
   std::string t = trim(text);
   if (t.empty()) return;
   if (!can_talk()) {
-    set_hint_flash("Not connected to Hermes");
+    set_hint_flash(tr("Not connected to Hermes"));
     update_model();
     return;
   }
@@ -991,8 +1057,10 @@ void App::submit_text(std::string_view text) {
   msg.set("id", request_id_).set("text", t);
   send(msg);
   user_echo_ = t;
+  reading_paused_ = false;
+  reply_final_ = false;
   reply_.clear();
-  status_ = "Sending...";
+  status_ = tr("Sending...");
   scroll_ = -1;
   mode_ = Mode::Thinking;
   mode_since_ = now();
@@ -1025,6 +1093,7 @@ bool App::turn_page() {
     pos = &card_scroll_;
     body = &card_body_;
   } else if ((model_.screen == Screen::Responding || model_.screen == Screen::Ready) && scroll_ >= 0) {
+    if (reading_paused_) return false;
     pos = &scroll_;
     body = &reply_;
   }
@@ -1189,6 +1258,7 @@ void App::h_ota_begin(const json::Value& m) {
     return;
   }
   ota_ = Ota::Receiving;
+  quick_controls_open_ = false;
   close_wifi_setup();
   close_settings();
   ota_received_ = ota_acked_ = 0;
@@ -1269,6 +1339,10 @@ void App::h_ota_abort(const json::Value&) {
 
 void App::tick() {
   const uint32_t t = now();
+  if (recording_cue_pending_ && (!hal_.speaker->busy() || t - recording_cue_at_ >= 500)) {
+    if (hal_.speaker->busy()) hal_.speaker->abort();
+    recording_cue_pending_ = false;
+  }
   power_tick();
   settings_tick();
 
@@ -1322,7 +1396,7 @@ void App::tick() {
   if (!prompt_id_.empty()) last_turn_rx_ = t;  // Hermes is waiting for the user, not stuck
   if (mode_ == Mode::Thinking && t - last_turn_rx_ > kThinkingTimeoutMs) {
     mode_ = Mode::Idle;
-    notice_ = "No reply from Hermes";
+    notice_ = tr("No reply from Hermes");
     notice_until_ = t + 8000;
     update_model();
   }
@@ -1356,7 +1430,7 @@ void App::tick() {
       update_model();
     } else if (held >= kNewSessionHintMs && can_talk()) {
       uint32_t left = (kNewSessionHoldMs - held + 999) / 1000;
-      std::string hint = "New session in " + std::to_string(left) + "s";
+      std::string hint = tr("New session in ") + std::to_string(left) + "s";
       if (hint != hint_flash_) {
         set_hint_flash(std::move(hint));
         update_model();
@@ -1385,6 +1459,7 @@ void App::tick() {
 
 void App::update_model() {
   UiModel& m = model_;
+  const std::string cancel = tr(profile_.cancel_label.c_str());
   m.title = name_;
   m.code.clear();
   m.detail.clear();
@@ -1398,6 +1473,10 @@ void App::update_model() {
   m.level = level_;
   m.speaking = speaking();
   m.color_test = false;
+  m.reading = Reading::None;
+  m.language = language_;
+  m.volume = volume_;
+  m.large_text = large_text_;
   m.speaker_button = profile_.touch_screen && hal_.speaker;  // drawn on the conversation screens
   m.muted = muted_;
   m.speaker_pressed = speaker_pressed_;
@@ -1425,12 +1504,12 @@ void App::update_model() {
   if (m.link == Link::Offline && network_up_) m.link = Link::Network;
   if (!wifi_setup_text_.empty()) {
     m.screen = Screen::Setup;
-    m.headline = "Wi-Fi setup";
-    m.detail = "Connect your phone";
+    m.headline = tr("Wi-Fi setup");
+    m.detail = tr("Connect your phone");
     m.body = wifi_setup_text_;
     m.qr = wifi_setup_code_;
     m.scroll = 0;
-    m.hint = profile_.touch_screen ? "Swipe down to close" : profile_.cancel_label + " to close";
+    m.hint = profile_.touch_screen ? tr("Swipe down to close") : cancel + tr(" to close");
     if (ui_) ui_->render(m);
     return;
   }
@@ -1445,7 +1524,7 @@ void App::update_model() {
     m.screen = Screen::Boot;
     m.hero = true;
     m.headline = "Hermes";
-    m.detail = "starting - fw " + profile_.firmware;
+    m.detail = tr("starting - fw ") + profile_.firmware;
     m.hint = device_id_;
   } else if (ota_ == Ota::Receiving || ota_ == Ota::Restarting) {
     m.screen = Screen::Updating;
@@ -1453,19 +1532,19 @@ void App::update_model() {
     m.caption_lines = 2;
     const std::string version = ota_version_.empty() ? std::string("new firmware") : "firmware " + ota_version_;
     if (ota_ == Ota::Restarting) {
-      m.headline = "Restarting";
-      m.detail = "Installed " + version;
+      m.headline = tr("Restarting");
+      m.detail = tr("Installed ") + version;
     } else {
-      m.headline = "Updating";
+      m.headline = tr("Updating");
       unsigned pct = ota_size_ ? static_cast<unsigned>(static_cast<uint64_t>(ota_received_) * 100 / ota_size_) : 0;
-      m.detail = version + ": " + std::to_string(pct) + "% of " + std::to_string((ota_size_ + 1023) / 1024) + " KB";
+      m.detail = version + ": " + std::to_string(pct) + tr("% of ") + std::to_string((ota_size_ + 1023) / 1024) + " KB";
     }
-    m.hint = "keep the power on";
+    m.hint = tr("keep the power on");
   } else if (!fatal_.empty()) {
     m.screen = Screen::Error;
     m.hero = true;
     m.caption_lines = kCaptionLines;
-    m.headline = "Setup needed";
+    m.headline = tr("Setup needed");
     m.detail = fatal_ + "\n" + (server_url_.empty() ? "Serial console: set server ws://<host>:8765/gadget"
                                                      : "Server: " + server_url_);
     m.hint = "see docs/getting-started.md";
@@ -1473,22 +1552,22 @@ void App::update_model() {
     m.screen = Screen::Offline;
     m.hero = true;
     m.caption_lines = 2;
-    m.headline = "No network";
-    m.detail = network_detail_.empty() ? "Waiting for Wi-Fi" : network_detail_;
-    m.hint = "configure Wi-Fi via serial";
+    m.headline = tr("No network");
+    m.detail = network_detail_.empty() ? tr("Waiting for Wi-Fi") : network_detail_;
+    m.hint = tr("configure Wi-Fi via serial");
   } else if (phase_ == Phase::Connecting || phase_ == Phase::Handshake) {
     m.screen = Screen::Connecting;
     m.hero = true;
     m.caption_lines = kCaptionLines;
-    m.headline = phase_ == Phase::Handshake ? "Authenticating" : "Connecting to Hermes";
+    m.headline = phase_ == Phase::Handshake ? tr("Authenticating") : tr("Connecting to Hermes");
     m.detail = server_url_;
     if (!last_close_.empty() && attempts_ > 1) m.detail += "\nError: " + last_close_;
     char buf[48];
     if (reconnect_pending_) {
       uint32_t wait = static_cast<int32_t>(reconnect_at_ - now()) > 0 ? (reconnect_at_ - now() + 999) / 1000 : 0;
-      std::snprintf(buf, sizeof(buf), "retry in %lus", static_cast<unsigned long>(wait));
+      std::snprintf(buf, sizeof(buf), tr("retry in %lus"), static_cast<unsigned long>(wait));
     } else {
-      std::snprintf(buf, sizeof(buf), "attempt %d", attempts_);
+      std::snprintf(buf, sizeof(buf), tr("attempt %d"), attempts_);
     }
     m.hint = buf;
   } else if (!paired_) {
@@ -1497,37 +1576,37 @@ void App::update_model() {
     m.caption_lines = kCaptionLines;
     if (!pairing_code_.empty()) {
       m.code = pairing_code_;
-      m.headline = "Pairing code " + pairing_code_;
-      m.detail = "On the Hermes host, run: " + pairing_command_;
+      m.headline = tr("Pairing code ") + pairing_code_;
+      m.detail = tr("On the Hermes host, run: ") + pairing_command_;
     } else {
-      m.headline = "Pair this device";
-      m.detail = "Asking Hermes for a pairing code...";
+      m.headline = tr("Pair this device");
+      m.detail = tr("Asking Hermes for a pairing code...");
     }
-    m.hint = "waiting for approval";
+    m.hint = tr("waiting for approval");
   } else if (mode_ == Mode::Listening) {
     m.screen = Screen::Listening;
     m.hero = true;
-    m.headline = "Listening";
-    m.detail = hands_free_ ? "Speak now - pause to send"
-               : profile_.touch_screen ? "Lift your finger to send" : "Release " + talk + " to send";
-    m.hint = profile_.cancel_label + " to discard";
+    m.headline = tr("Listening");
+    m.detail = hands_free_ ? tr("Speak now - pause to send")
+               : profile_.touch_screen ? tr("Lift your finger to send") : tr("Release ") + talk + tr(" to send");
+    m.hint = cancel + tr(" to discard");
   } else if (!prompt_id_.empty()) {
     m.screen = Screen::Prompt;
     m.hero = true;
     m.caption_lines = kPromptLines;
-    m.headline = prompt_title_.empty() ? "Hermes asks" : prompt_title_;
+    m.headline = prompt_title_.empty() ? tr("Hermes asks") : prompt_title_;
     m.detail = prompt_text_;
-    m.yes = profile_.touch_screen ? "Tap: Yes" : talk + ": Yes";
-    if (profile_.has_cancel_button) m.no = profile_.touch_screen ? "Swipe: No" : profile_.cancel_label + ": No";
-    m.hint = "Hermes is waiting for you";
+    m.yes = profile_.touch_screen ? tr("Tap: Yes") : talk + tr(": Yes");
+    if (profile_.has_cancel_button) m.no = profile_.touch_screen ? tr("Swipe: No") : cancel + tr(": No");
+    m.hint = tr("Hermes is waiting for you");
   } else if (overlay_ == Overlay::Image) {
     m.screen = Screen::Image;
-    m.headline = "Image";
-    m.hint = profile_.cancel_label + " to close";
+    m.headline = tr("Image");
+    m.hint = cancel + tr(" to close");
   } else if (overlay_ == Overlay::Card) {
     m.screen = Screen::Card;
     m.headline = card_title_.empty() ? "Hermes" : card_title_;
-    m.hint = profile_.cancel_label + " to close";
+    m.hint = cancel + tr(" to close");
     // A short card is a caption under the mascot; a long one gets the text layout and pages.
     m.hero = !ui_ || static_cast<int>(wrap_text(card_body_, ui_->layout().hero_cols).size()) <= kCaptionLines;
     if (m.hero) {
@@ -1540,41 +1619,54 @@ void App::update_model() {
   } else if (mode_ == Mode::Thinking) {
     m.screen = Screen::Thinking;
     m.hero = true;
-    m.headline = "Thinking";
+    m.headline = tr("Thinking");
     // The live status phrase when Hermes sends one, else what speech-to-text heard.
     m.detail = status_;
     if (!user_echo_.empty()) {
       m.body = "\"" + user_echo_ + "\"";
       if (m.detail.empty()) m.detail = m.body;
     }
-    m.hint = profile_.cancel_label + " to stop";
+    m.hint = cancel + tr(" to stop");
   } else if (mode_ == Mode::Responding) {
     m.screen = Screen::Responding;
-    m.headline = m.speaking ? "Speaking" : "Hermes";
+    m.headline = m.speaking ? tr("Speaking") : "Hermes";
     m.detail = status_;
     m.body = reply_;
-    m.hint = profile_.touch_screen ? "Hold to reply" : talk + " to reply";
+    m.hint = profile_.touch_screen ? tr("Hold to reply") : talk + tr(" to reply");
     // Spoken audio can start before the text arrives: let the mascot talk meanwhile.
     m.hero = reply_.empty();
   } else {
     m.screen = Screen::Ready;
-    m.headline = "Ready";
+    m.headline = tr("Ready");
     m.body = reply_;
-    m.hint = profile_.touch_screen ? (talk_mode_ == TalkMode::Tap ? "Tap the screen to talk" : "Hold the screen to talk")
-                                   : (talk_mode_ == TalkMode::Tap ? "tap " : "hold ") + talk + " to talk";
-    bool showing_reply = !reply_.empty() && static_cast<int32_t>(reply_until_ - now()) > 0;
+    m.hint = profile_.touch_screen ? (talk_mode_ == TalkMode::Tap ? tr("Tap the screen to talk") : tr("Hold the screen to talk"))
+                                   : (talk_mode_ == TalkMode::Tap ? tr("tap ") : tr("hold ")) + talk + tr(" to talk");
+    bool showing_reply = !reply_.empty() && (reading_paused_ || static_cast<int32_t>(reply_until_ - now()) > 0);
     m.hero = !showing_reply;
     if (m.hero) {
-      m.headline = "Hi, I'm Hermes";
-      m.detail = reply_.empty() || !profile_.has_scroll_buttons ? "Ask me anything" : "UP shows my last reply";
+      m.headline = tr("Hi, I'm Hermes");
+      m.detail = reply_.empty() || !profile_.has_scroll_buttons ? tr("Ask me anything") : tr("UP shows my last reply");
     }
   }
   bool keeps_detail = m.screen == Screen::Pairing || m.screen == Screen::Boot || m.screen == Screen::Prompt;
   if (!notice_.empty() && !keeps_detail) m.detail = notice_;
   if (m.screen == Screen::Ready && m.hero && power_status_ && power_status_->battery_percent &&
       *power_status_->battery_percent <= 10 && power_status_->external_power == false)
-    m.detail = "Low battery: connect USB";
+    m.detail = tr("Low battery: connect USB");
   if (!hint_flash_.empty()) m.hint = hint_flash_;
+  if (quick_controls_open_) {
+    m.screen = Screen::Controls;
+    m.hero = false;
+    m.headline = tr("Controls");
+    m.detail.clear();
+    m.body.clear();
+    m.hint.clear();
+  }
+  if (profile_.touch_screen && reply_final_ && !reply_.empty() &&
+      (m.screen == Screen::Ready || m.screen == Screen::Responding) && hint_flash_.empty()) {
+    m.reading = m.hero ? Reading::Recall : (reading_paused_ ? Reading::Paused : Reading::Auto);
+    if (m.hero && m.detail == tr("Ask me anything")) m.detail = m.hint;
+  }
   if (ui_ && !display_sleeping_) ui_->render(m);
 }
 
@@ -1686,6 +1778,16 @@ std::string App::console(std::string_view raw) {
         (value.size() > 4 || value.find_first_not_of("0123456789") != std::string::npos || std::atoi(value.c_str()) > 3600))
       return "@error screen_timeout must be 0..3600 seconds";
     if (key == "mute" && !value.empty() && value != "0" && value != "1") return "@error mute must be 0 or 1";
+    if (key == "end_silence_ms" && !value.empty() &&
+        (value.size() > 4 || value.find_first_not_of("0123456789") != std::string::npos ||
+         std::atoi(value.c_str()) < 400 || std::atoi(value.c_str()) > 3000))
+      return "@error end_silence_ms must be 400..3000";
+    if (key == "recording_cues" && !value.empty() && value != "0" && value != "1")
+      return "@error recording_cues must be 0 or 1";
+    if (key == "text_size" && !value.empty() && value != "normal" && value != "large")
+      return "@error text_size must be normal or large";
+    if (key == "language" && !value.empty() && value != "en" && value != "es")
+      return "@error language must be en or es";
     if (!hal_.storage) return "@error no storage";
     if (value.empty()) hal_.storage->erase(key);
     else hal_.storage->set(key, value);

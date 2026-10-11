@@ -1,9 +1,8 @@
 """Turn chat-flavoured agent text into something a tiny screen can show.
 
-Devices render a small bitmap font (ASCII only on the reference firmware), so
-the server strips Markdown, folds typographic punctuation and accents to
-ASCII, and drops emoji. Doing it here keeps the firmware simple and lets every
-board benefit from improvements without a reflash.
+The server strips Markdown and folds punctuation to the device's bitmap font.
+ASCII devices fold accents; utf8-es devices preserve Spanish letters and
+punctuation. Unsupported symbols and emoji are dropped.
 """
 
 from __future__ import annotations
@@ -36,6 +35,7 @@ _TABLE_SEP = re.compile(r"^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$", re
 _THINK = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
 _BLANKS = re.compile(r"\n{3,}")
 _SPACES = re.compile(r"[ \t]{2,}")
+_SPANISH = frozenset("áéíóúüñÁÉÍÓÚÜÑ¿¡")
 
 
 def strip_markdown(text: str) -> str:
@@ -54,10 +54,10 @@ def strip_markdown(text: str) -> str:
     return text
 
 
-def fold_ascii(text: str) -> str:
+def fold_ascii(text: str, *, spanish: bool = False) -> str:
     out = []
     for ch in text:
-        if ch == "\n" or " " <= ch <= "~":
+        if ch == "\n" or " " <= ch <= "~" or (spanish and ch in _SPANISH):
             out.append(ch)
             continue
         if ch in _PUNCT:
@@ -77,5 +77,7 @@ def for_device(text: str, charset: str = "ascii") -> str:
     text = strip_markdown(text or "")
     if charset == "ascii":
         text = fold_ascii(text)
+    elif charset == "utf8-es":
+        text = fold_ascii(unicodedata.normalize("NFC", text), spanish=True)
     text = "\n".join(_SPACES.sub(" ", line).rstrip() for line in text.splitlines())
     return _BLANKS.sub("\n\n", text).strip()

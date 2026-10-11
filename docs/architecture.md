@@ -17,7 +17,7 @@
 2. **The device stays thin.**
    - Speech recognition, text-to-speech, the language model, Markdown handling and image decoding all happen on the host.
    - The device captures audio, renders text and pixels, plays PCM and runs the actions it declares.
-   - Firmware therefore needs no codecs, fonts beyond ASCII, or model-specific logic, and server-side improvements reach every board without reflashing.
+   - Firmware needs no codecs or model-specific logic. Its bitmap font covers ASCII and Spanish letters and punctuation; the host shapes other text to that repertoire.
 3. **One core, many hosts.**
    - Everything that is not a driver lives in `firmware/core`: protocol, authentication, connection lifecycle, pairing UX, push-to-talk, VAD, playback control, UI, actions, telemetry and console. It is portable C++17 with no exceptions or RTTI, compiled unchanged for the ESP32 and for the desktop simulator.
    - The Hermes side mirrors this: `plugin/hub.py` knows nothing about Hermes and runs unchanged under the gateway adapter and under the standalone development server.
@@ -67,11 +67,14 @@ Every screen that isn't showing reply text uses a **hero layout**: the Hermes Ag
   - a moving mouth and amber waves while speaking.
 - **Partial redraws:** the hero band tracks static content (screen, caption) separately from animation state. When only the animation changes, it redraws and flushes just the rows that animation can touch: the eye rows for a blink, the wave rows while listening. A blink therefore costs about 25 rows of SPI traffic, not a full screen.
 - **Reply text:** a finished reply stays on screen for 20 s before the mascot returns. On boards with scroll buttons, UP brings it back.
+- **Touchscreen reading:** the bottom bar offers previous/next page and **Pause text** once a final reply arrives. Pausing or paging manually holds the reply until **Auto pages**, cancellation, or a new message. After the mascot returns, **Last reply** opens the retained text at the beginning, paused. These controls only navigate local text; the speaker continues playing. The bar reserves finger space inside the panel's usable area, including round and rounded-corner displays. Screen timeout still applies.
 
 ### Interaction
 
 - **Push-to-talk (default):** hold to speak, release to send. A press under 350 ms is discarded as a tap, and recording stops at 60 s, the hub's default `max_utterance_s`. A board whose TALK key can slip under the thumb sets `DeviceProfile::talk_release_grace_ms`: a release then ends the recording only after TALK stays up that long (0.4 s on the AMOLED-1.8), and a press before then continues it.
 - **Tap mode** (`set talk_mode tap`): tap to start; the VAD (or a second tap) ends the utterance.
+- **Voice settings:** `end_silence_ms` sets the tap-mode silence interval, default 900 ms. Optional `recording_cues` play local start/end tones and withhold mic samples until the start tone drains, with a 500 ms timeout. Mute and zero volume suppress the tones.
+- **Quick controls:** a title or speaker tap on touch boards opens local volume and text-size controls without stopping playback. Holding the title opens full settings. Large text increases the reply font by one integer scale step and recalculates wrapping; touch targets stay fixed. `language` selects English or Spanish device labels independently of the agent's text.
 - **Barge-in:** pressing talk while a reply plays stops playback immediately. The new message reaches Hermes, whose default "interrupt" busy mode stops the old turn.
 - **Cancel** acts on release: it discards a recording, dismisses an overlay, or stops a turn (Hermes `/stop`).
 - **Holding CANCEL for 2 s** starts a new session (`session.new` → Hermes `/new`). It fires while still held, after a countdown in the hint bar. The hold is the confirmation, so the plugin answers Hermes's "Confirm /new" itself.
@@ -84,7 +87,7 @@ Every screen that isn't showing reply text uses a **hero layout**: the Hermes Ag
 | `hub.py` | `DeviceHub` (websockets server, handshake and enrollment, heartbeats, routing) and `DeviceSession` (outbound API: replies, status, cards, images, paced `AudioOut`, `invoke_action`) |
 | `adapter.py` | `GadgetAdapter`, the `HubDelegate` that maps device traffic to `MessageEvent`s and Hermes output to device frames |
 | `tools.py` | Agent tools, run on agent worker threads and bridged to the hub loop with `run_coroutine_threadsafe` |
-| `textfmt.py` | Markdown → plain text, typography → ASCII |
+| `textfmt.py` | Markdown → plain text, typography → the device's declared font repertoire |
 | `audio.py` | WAV packing, streaming resampler, file decoding (WAV natively, the rest through ffmpeg) |
 | `imaging.py` | Any image → RGB565 that fits the device's image box (Pillow) |
 | `store.py` | Device keys and pending pairing codes in the plugin's data directory |

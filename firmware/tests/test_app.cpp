@@ -103,10 +103,11 @@ struct FakeHal : hg::Display, hg::AudioIn, hg::AudioOut, hg::Transport, hg::Stor
 
   // Speaker
   bool spk_open = false;
+  bool spk_drains = false;
   size_t spk_samples = 0;
   bool begin(uint32_t) override { return spk_open = true; }
   void write(const int16_t*, size_t n) override { spk_samples += n; }
-  void end() override { spk_open = false; }
+  void end() override { if (!spk_drains) spk_open = false; }
   void abort() override { spk_open = false; }
   bool busy() const override { return spk_open; }
   void set_volume(uint8_t percent) override { volume = percent; }
@@ -729,6 +730,189 @@ TEST("app: a finished reply stays readable, then the mascot returns; UP brings i
   CHECK_EQ(r.app.model().body, std::string("Here is the answer."));
 }
 
+TEST("touch: pause keeps the reply readable; page buttons move without recording") {
+  Rig r(Rig::touch_profile());
+  r.bring_online(true);
+  std::string text;
+  for (int i = 0; i < 40; ++i) text += "sentence " + std::to_string(i) + " of a long answer. ";
+  r.server(R"({"type":"turn.start","turn":"t"})");
+  r.server(R"({"type":"reply","turn":"t","text":")" + text + "\"}");
+  r.server(R"({"type":"turn.end","turn":"t","outcome":"success"})");
+  r.advance(200);
+  hg::TouchGestures touch(r.app);
+  auto tap = [&](int x) {
+    touch.update(true, x, 220, r.fake.clock);
+    touch.update(false, 0, 0, r.fake.clock);
+  };
+  tap(160);  // pause text
+  r.advance(25000);
+  CHECK(!r.app.model().hero);
+  CHECK_EQ(r.app.model().scroll, 0);
+  CHECK_EQ(r.app.model().body, text);
+  CHECK_EQ(r.fake.count("audio.start"), 0);
+  tap(280);  // next page
+  CHECK(r.app.model().scroll > 1);
+  const int page = r.app.model().scroll;
+  r.server(R"({"type":"ping","ts":1})");
+  r.advance(25000);
+  CHECK_EQ(r.app.model().scroll, page);
+  CHECK(!r.app.model().hero);
+  tap(40);  // previous page
+  CHECK_EQ(r.app.model().scroll, 0);
+  tap(160);  // resume automatic paging
+  r.advance(8100);
+  CHECK(r.app.model().scroll > 0);
+  CHECK_EQ(r.fake.count("audio.start"), 0);
+}
+
+TEST("touch: last reply opens paused without replaying audio or sending a request") {
+  Rig r(Rig::touch_profile());
+  r.bring_online(true);
+  r.server(R"({"type":"turn.start","turn":"t"})");
+  r.server(R"({"type":"reply","turn":"t","text":"Here is the answer."})");
+  r.server(R"({"type":"turn.end","turn":"t","outcome":"success"})");
+  r.advance(21000);
+  CHECK(r.app.model().hero);
+  const size_t messages = r.fake.sent.size();
+  hg::TouchGestures touch(r.app);
+  touch.update(true, 160, 220, r.fake.clock);
+  touch.update(false, 0, 0, r.fake.clock);
+  CHECK(!r.app.model().hero);
+  CHECK_EQ(r.app.model().body, std::string("Here is the answer."));
+  r.advance(25000);
+  CHECK(!r.app.model().hero);
+  CHECK_EQ(r.fake.sent.size(), messages);
+  CHECK(!r.fake.spk_open);
+}
+
+TEST("touch: reading holds do not talk in tap mode; dragging off does not change pages") {
+  Rig r(Rig::touch_profile());
+  r.fake.kv["talk_mode"] = "tap";
+  r.bring_online(true);
+  r.server(R"({"type":"reply","text":"Here is the answer."})");
+  hg::TouchGestures touch(r.app);
+  touch.update(true, 160, 220, r.fake.clock);
+  r.advance(1500);
+  touch.tick(r.fake.clock);
+  CHECK(!r.fake.mic_on);
+  touch.update(false, 0, 0, r.fake.clock);
+  CHECK(r.app.model().reading == hg::Reading::Paused);
+  touch.update(true, 160, 220, r.fake.clock);
+  touch.update(true, 280, 220, r.fake.clock + 50);
+  touch.update(false, 0, 0, r.fake.clock + 60);
+  CHECK(r.app.model().reading == hg::Reading::Paused);
+  CHECK_EQ(r.app.model().scroll, 0);
+  CHECK_EQ(r.fake.count("audio.start"), 0);
+  // The text area still starts hands-free speech with a tap.
+  touch.update(true, 160, 100, r.fake.clock);
+  touch.update(false, 0, 0, r.fake.clock);
+  CHECK(r.fake.mic_on);
+  CHECK(r.app.screen() == hg::Screen::Listening);
+  CHECK(r.app.model().reading == hg::Reading::None);
+}
+
+TEST("touch: pausing text keeps audio playing; a pending reading touch never answers a new prompt") {
+  Rig r(Rig::touch_profile());
+  r.bring_online(true);
+  r.server(R"({"type":"audio.start","stream":2,"rate":16000,"format":"pcm16"})");
+  r.server(R"({"type":"reply","text":"Here is the answer."})");
+  hg::TouchGestures touch(r.app);
+  touch.update(true, 160, 220, r.fake.clock);
+  touch.update(false, 0, 0, r.fake.clock);
+  r.advance(25000);
+  CHECK(r.fake.spk_open);
+  CHECK(r.app.model().speaking);
+  CHECK(r.app.model().reading == hg::Reading::Paused);
+  touch.update(true, 160, 220, r.fake.clock);
+  r.server(R"({"type":"prompt","id":"q1","title":"Confirm","text":"Continue?"})");
+  r.advance(1000);
+  touch.tick(r.fake.clock);
+  touch.update(false, 0, 0, r.fake.clock);
+  CHECK(r.app.screen() == hg::Screen::Prompt);
+  CHECK(r.app.model().reading == hg::Reading::None);
+  CHECK(r.fake.last("prompt.reply") == nullptr);
+  CHECK_EQ(r.fake.count("audio.start"), 0);
+}
+
+TEST("touch: cancel leaves paused text; each new reply starts with automatic pages") {
+  Rig r(Rig::touch_profile());
+  r.bring_online(true);
+  r.server(R"({"type":"reply","text":"Here is the answer."})");
+  r.server(R"({"type":"turn.end","outcome":"success"})");
+  r.advance(200);
+  hg::TouchGestures touch(r.app);
+  touch.update(true, 160, 220, r.fake.clock);
+  touch.update(false, 0, 0, r.fake.clock);
+  CHECK(r.app.model().reading == hg::Reading::Paused);
+  touch.update(true, 160, 100, r.fake.clock);
+  touch.update(true, 160, 180, r.fake.clock + 50);
+  touch.update(false, 0, 0, r.fake.clock + 60);
+  CHECK(r.app.model().hero);
+  CHECK(r.app.model().reading == hg::Reading::Recall);
+  touch.update(true, 160, 220, r.fake.clock);
+  touch.update(false, 0, 0, r.fake.clock);
+  CHECK(r.app.model().reading == hg::Reading::Paused);
+  r.app.submit_text("Next question");
+  CHECK(r.app.model().reading == hg::Reading::None);
+  r.server(R"({"type":"turn.start","turn":"next"})");
+  r.server(R"({"type":"reply.delta","turn":"next","text":"An unfinished"})");
+  CHECK(r.app.model().reading == hg::Reading::None);
+  r.server(R"({"type":"reply","turn":"next","text":"A new answer."})");
+  CHECK(r.app.model().reading == hg::Reading::Auto);
+}
+
+TEST("touch: screen timeout preserves paused text and the first touch only wakes it") {
+  Rig r(Rig::touch_profile());
+  r.fake.backlight = true;
+  r.fake.kv["screen_timeout"] = "30";
+  r.bring_online(true);
+  r.server(R"({"type":"reply","text":"Here is the answer."})");
+  r.server(R"({"type":"turn.end","outcome":"success"})");
+  r.advance(200);
+  hg::TouchGestures touch(r.app);
+  touch.update(true, 160, 220, r.fake.clock);
+  touch.update(false, 0, 0, r.fake.clock);
+  r.advance(31000);
+  CHECK(r.fake.asleep);
+  touch.update(true, 160, 220, r.fake.clock);
+  touch.update(false, 0, 0, r.fake.clock);
+  CHECK(!r.fake.asleep);
+  CHECK(r.app.model().reading == hg::Reading::Paused);
+  CHECK_EQ(r.app.model().body, std::string("Here is the answer."));
+  CHECK_EQ(r.fake.count("audio.start"), 0);
+  touch.update(true, 160, 220, r.fake.clock);
+  touch.update(false, 0, 0, r.fake.clock);
+  CHECK(r.app.model().reading == hg::Reading::Auto);
+}
+
+TEST("touch: reading controls use panel coordinates on round and rounded screens") {
+  for (bool round : {true, false}) {
+    Rig r(Rig::touch_profile());
+    if (round) r.fake.make_round(466);
+    else {
+      r.fake.width = 368;
+      r.fake.height = 448;
+      r.fake.corner_radius = 40;
+      r.fake.fb.assign(368 * 448, 0);
+    }
+    r.bring_online(true);
+    r.server(R"({"type":"reply","text":"Read this answer at your own pace."})");
+    const int x = round ? 233 : 184, y = round ? 377 : 428;
+    hg::TouchGestures touch(r.app);
+    touch.update(true, x, y, r.fake.clock);
+    touch.update(false, 0, 0, r.fake.clock);
+    CHECK(r.app.model().reading == hg::Reading::Paused);
+    CHECK_EQ(r.fake.count("audio.start"), 0);
+    CHECK(r.app.reading_control_hit(0, 0) == hg::ReadingControl::None);
+    CHECK(r.app.reading_control_hit(x, y - 50) == hg::ReadingControl::None);
+  }
+  Rig buttons;
+  buttons.bring_online(true);
+  buttons.server(R"({"type":"reply","text":"Button controls are unchanged."})");
+  CHECK(buttons.app.model().reading == hg::Reading::None);
+  CHECK(buttons.app.reading_control_hit(160, 220) == hg::ReadingControl::None);
+}
+
 TEST("app: hero animation redraws only a slice of the screen") {
   Rig r;
   r.bring_online(true);
@@ -1082,6 +1266,199 @@ TEST("settings: physical chord opens locally and saves volume, brightness and ta
   CHECK_EQ(reboot.app.device_id(), r.app.device_id());
 }
 
+TEST("voice: the selected silence interval keeps a natural pause inside the same recording") {
+  Rig r;
+  r.fake.kv["talk_mode"] = "tap";
+  r.fake.kv["end_silence_ms"] = "1500";
+  r.bring_online(true);
+  r.app.console("talk");
+  r.app.console("release");
+  std::vector<int16_t> speech(320, 4000), quiet(320, 0);
+  for (int i = 0; i < 20; ++i) { r.app.on_mic_samples(speech.data(), speech.size()); r.advance(20); }
+  for (int i = 0; i < 50; ++i) { r.app.on_mic_samples(quiet.data(), quiet.size()); r.advance(20); }
+  CHECK(r.fake.mic_on);
+  CHECK(r.fake.last("audio.end") == nullptr);
+  for (int i = 0; i < 30; ++i) { r.app.on_mic_samples(quiet.data(), quiet.size()); r.advance(20); }
+  CHECK(!r.fake.mic_on);
+  CHECK(r.fake.last("audio.end") != nullptr);
+  CHECK_EQ(r.fake.count("audio.start"), 1);
+}
+
+TEST("voice: recording cues drain locally before microphone samples leave the device") {
+  Rig r;
+  r.fake.kv["recording_cues"] = "1";
+  r.fake.spk_drains = true;
+  r.bring_online(true);
+  r.app.console("talk");
+  CHECK(r.fake.spk_samples > 0);
+  std::vector<int16_t> speech(320, 4000);
+  r.app.on_mic_samples(speech.data(), speech.size());
+  CHECK(r.fake.sent_binary.empty());
+  r.advance(100);
+  r.app.on_mic_samples(speech.data(), speech.size());
+  CHECK(r.fake.sent_binary.empty());
+  r.fake.spk_open = false;  // physical audio driver reports the tone has drained
+  r.advance(10);
+  r.app.on_mic_samples(speech.data(), speech.size());
+  CHECK_EQ(r.fake.sent_binary.size(), size_t(1));
+  r.advance(400);
+  const size_t start_tone = r.fake.spk_samples;
+  r.app.console("release");
+  CHECK(!r.fake.mic_on);
+  CHECK(r.fake.last("audio.end") != nullptr);
+  CHECK(r.fake.spk_samples > start_tone);  // end tone is local too
+  r.app.console("set mute 1");
+  const size_t before = r.fake.spk_samples;
+  r.app.console("talk");
+  r.advance(400);
+  r.app.console("release");
+  CHECK_EQ(r.fake.spk_samples, before);
+}
+
+TEST("settings: voice, text and language settings persist and reject invalid input") {
+  Rig r;
+  r.app.begin();
+  for (const char* line : {"set end_silence_ms 2400", "set recording_cues 1", "set text_size large", "set language es"})
+    CHECK(r.app.console(line).rfind("@ok", 0) == 0);
+  const auto saved = r.fake.kv;
+  for (const char* line : {"set end_silence_ms -1", "set end_silence_ms 10ms", "set end_silence_ms 3001",
+                          "set recording_cues yes", "set text_size huge", "set language xx"})
+    CHECK(r.app.console(line).rfind("@error", 0) == 0);
+  CHECK_EQ(r.fake.kv, saved);
+  Rig reboot;
+  reboot.fake.kv = saved;
+  reboot.app.begin();
+  CHECK(reboot.app.model().language == hg::Language::Spanish);
+  CHECK(reboot.app.model().large_text);
+  CHECK(reboot.app.open_settings());
+  CHECK_EQ(reboot.app.model().headline, std::string("Ajustes"));
+  CHECK_EQ(reboot.app.model().detail, std::string("Volumen del altavoz"));
+  reboot.app.close_settings();
+  reboot.app.console("set language en");
+  CHECK(reboot.app.open_settings());
+  CHECK_EQ(reboot.app.model().headline, std::string("Settings"));
+}
+
+TEST("voice: a stalled or cancelled start cue cannot block recording") {
+  Rig r;
+  r.fake.kv["recording_cues"] = "1";
+  r.fake.spk_drains = true;
+  r.bring_online(true);
+  r.app.console("talk");
+  r.advance(500);
+  CHECK(!r.fake.spk_open);
+  const int16_t speech[] = {4000, -4000};
+  r.app.on_mic_samples(speech, 2);
+  CHECK_EQ(r.fake.sent_binary.size(), size_t(1));
+  r.app.console("cancel");
+  r.app.console("release");
+  r.app.console("talk");
+  CHECK(r.fake.spk_open);
+  r.app.console("cancel");
+  CHECK(!r.fake.spk_open);
+  CHECK(!r.fake.mic_on);
+  CHECK_EQ(r.fake.count("audio.end"), 0);
+}
+
+TEST("touch: quick controls change volume and text while preserving the spoken reply") {
+  Rig r(Rig::touch_profile());
+  r.bring_online(true);
+  r.server(R"({"type":"audio.start","stream":2,"rate":16000,"format":"pcm16"})");
+  const std::string answer = "Una canción para el niño y el pingüino. ¿Quieres oír más?";
+  r.server(R"({"type":"reply","text":")" + answer + "\"}");
+  hg::TouchGestures touch(r.app);
+  auto tap = [&](int x, int y) {
+    touch.update(true, x, y, r.fake.clock);
+    touch.update(false, 0, 0, r.fake.clock);
+  };
+  tap(100, 4);  // title opens controls without stopping playback
+  CHECK(r.app.quick_controls_open());
+  CHECK(r.fake.spk_open);
+  CHECK(r.fake.last("cancel") == nullptr);
+  tap(260, 95);  // volume up
+  CHECK_EQ(r.fake.volume, 80);
+  CHECK_EQ(r.fake.kv["volume"], std::string("80"));
+  tap(230, 165);  // large text
+  CHECK(r.app.model().large_text);
+  CHECK_EQ(r.fake.kv["text_size"], std::string("large"));
+  tap(160, 220);  // done
+  CHECK(!r.app.quick_controls_open());
+  CHECK(r.fake.spk_open);
+  CHECK_EQ(r.app.model().body, answer);
+  CHECK_EQ(r.fake.count("audio.start"), 0);
+  r.app.on_button(hg::Button::Cancel, true);
+  CHECK(r.app.open_quick_controls());
+  r.advance(2200);
+  CHECK(r.app.quick_controls_open());
+  CHECK_EQ(r.fake.count("session.new"), 0);
+  touch.update(true, 230, 165, r.fake.clock);
+  r.server(R"({"type":"prompt","id":"q","title":"Confirm","text":"Continue?"})");
+  touch.update(false, 0, 0, r.fake.clock);  // an old touch must not answer the new prompt
+  CHECK(!r.app.quick_controls_open());
+  CHECK(r.app.screen() == hg::Screen::Prompt);
+  CHECK_EQ(r.fake.count("prompt.reply"), 0);
+}
+
+TEST("touch: text controls work without a speaker and never start a recording") {
+  Rig r(Rig::touch_profile());
+  r.hal.speaker = nullptr;
+  r.bring_online(true);
+  CHECK(r.app.open_quick_controls());
+  CHECK(r.app.quick_control_hit(160, 95) == hg::QuickControl::None);
+  hg::TouchGestures touch(r.app);
+  touch.update(true, 160, 95, r.fake.clock);
+  r.advance(1200);
+  touch.tick(r.fake.clock);
+  touch.update(false, 0, 0, r.fake.clock);
+  CHECK(!r.fake.mic_on);
+  CHECK_EQ(r.fake.count("audio.start"), 0);
+  touch.update(true, 230, 165, r.fake.clock);
+  touch.update(false, 0, 0, r.fake.clock);
+  CHECK(r.app.model().large_text);
+  r.app.console("cancel");
+  CHECK(!r.app.quick_controls_open());
+  CHECK_EQ(r.fake.count("cancel"), 0);
+}
+
+TEST("ui: round quick controls use panel coordinates and preserve hit areas at large text") {
+  FakeHal display;
+  display.make_round(466);
+  hg::Ui ui(display, true);
+  hg::UiModel m;
+  m.screen = hg::Screen::Controls;
+  m.speaker_button = true;
+  m.language = hg::Language::Spanish;
+  ui.render(m);
+  CHECK(ui.control_hit(m, 125, 200) == hg::QuickControl::VolumeDown);
+  CHECK(ui.control_hit(m, 233, 200) == hg::QuickControl::Mute);
+  CHECK(ui.control_hit(m, 340, 200) == hg::QuickControl::VolumeUp);
+  CHECK(ui.control_hit(m, 150, 300) == hg::QuickControl::TextNormal);
+  CHECK(ui.control_hit(m, 310, 300) == hg::QuickControl::TextLarge);
+  ui.set_large_text(true);
+  CHECK(ui.control_hit(m, 310, 300) == hg::QuickControl::TextLarge);
+  CHECK(ui.control_hit(m, 233, 377) == hg::QuickControl::Close);
+  CHECK(ui.control_hit(m, 20, 300) == hg::QuickControl::None);
+}
+
+TEST("ui: larger text wraps fewer characters while keeping header and touch controls fixed") {
+  FakeHal display;
+  hg::Ui ui(display, true);
+  const auto normal = ui.layout();
+  ui.set_large_text(true);
+  CHECK(ui.layout().body_cols < normal.body_cols);
+  CHECK(ui.layout().body_rows < normal.body_rows);
+  CHECK_EQ(ui.layout().scale, normal.scale);
+  CHECK_EQ(ui.layout().header_h, normal.header_h);
+  CHECK_EQ(ui.layout().bottom_h, normal.bottom_h);
+  hg::UiModel m;
+  m.screen = hg::Screen::Ready;
+  m.body = "El niño canta una canción. ";
+  m.reading = hg::Reading::Paused;
+  m.language = hg::Language::Spanish;
+  ui.render(m);
+  CHECK(ui.reading_hit(m, 160, 220) == hg::ReadingControl::TogglePause);
+}
+
 TEST("settings: hardware checks are local and prompts release the microphone") {
   Rig r;
   r.bring_online(true);
@@ -1147,7 +1524,7 @@ TEST("settings: title hold and menu swipe work without starting a recording") {
   CHECK(r.app.screen() == hg::Screen::Ready);
 }
 
-TEST("touch: holding the speaker button mutes and unmutes; a tap only says how") {
+TEST("touch: holding the speaker button mutes and unmutes; a tap opens quick controls") {
   Rig r(Rig::touch_profile());
   r.bring_online(true);
   CHECK(r.app.model().speaker_button);
@@ -1164,7 +1541,9 @@ TEST("touch: holding the speaker button mutes and unmutes; a tap only says how")
   touch.update(false, 0, 0, r.fake.clock);
   CHECK(!r.app.muted());
   CHECK(!r.app.model().speaker_pressed);
-  CHECK_EQ(r.app.model().hint, std::string("Hold the speaker to mute"));
+  CHECK(r.app.screen() == hg::Screen::Controls);
+  CHECK(r.app.quick_controls_open());
+  r.app.close_quick_controls();
 
   touch.update(true, 34, 50, r.fake.clock);
   r.advance(450);
@@ -1231,7 +1610,9 @@ TEST("touch: the speaker button stays pressed through a hold, and a swipe from i
   touch.tick(r.fake.clock);
   touch.update(false, 0, 0, r.fake.clock);
   CHECK(r.app.muted());
-  CHECK_EQ(r.app.model().hint, std::string("Hold the speaker to unmute"));
+  CHECK(r.app.screen() == hg::Screen::Controls);
+  CHECK(r.app.muted());
+  r.app.close_quick_controls();
 
   // Swiping down from the button is the cancel swipe, as anywhere else.
   r.app.submit_text("What's the weather?");

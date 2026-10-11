@@ -14,6 +14,7 @@
 #include "hg/hal.hpp"
 #include "hg/mascot.hpp"
 #include "hg/qr.hpp"
+#include "hg/locale.hpp"
 
 namespace hg {
 
@@ -33,9 +34,13 @@ enum class Screen : uint8_t {
   Updating,  // installing a firmware update
   Settings,
   Setup,
+  Controls,  // local volume and text controls; the conversation keeps running
 };
 
 enum class Link : uint8_t { Offline, Network, Connecting, Online };
+enum class Reading : uint8_t { None, Recall, Auto, Paused };
+enum class ReadingControl : uint8_t { None, Recall, Previous, TogglePause, Next };
+enum class QuickControl : uint8_t { None, VolumeDown, Mute, VolumeUp, TextNormal, TextLarge, Close };
 
 const char* screen_name(Screen s);
 
@@ -54,6 +59,10 @@ struct UiModel {
   bool color_test = false;
   uint32_t frame = 0;    // animation frame, advanced by the app
   std::string hint;      // bottom bar
+  Reading reading = Reading::None;  // touch controls in place of the bottom hint
+  Language language = Language::English;
+  uint8_t volume = 70;
+  bool large_text = false;
   std::string yes, no;   // answer buttons under the hero caption (Prompt screen)
   // Show the mascot as large as fits, with headline/detail as a caption,
   // instead of the header + text layout.
@@ -77,6 +86,7 @@ struct UiModel {
 
 struct UiLayout {
   int scale = 1;  // base text scale
+  int body_scale = 1;  // independently adjustable reply/card/settings text
   int top_h = 0, header_h = 0, bottom_h = 0;
   int body_cols = 0, body_rows = 0;
   int main_y = 0, main_h = 0;  // area between the bars (used for images)
@@ -85,7 +95,7 @@ struct UiLayout {
 
 class Ui {
  public:
-  explicit Ui(Display& display);
+  explicit Ui(Display& display, bool touch_screen = false);
 
   // Renders bands whose inputs changed since the last call and flushes them.
   void render(const UiModel& model);
@@ -106,6 +116,9 @@ class Ui {
   // Panel coordinates inside the speaker button as last drawn (with a margin
   // for fingers); false while it isn't on screen.
   bool speaker_hit(int x, int y) const;
+  ReadingControl reading_hit(const UiModel& m, int x, int y) const;
+  QuickControl control_hit(const UiModel& m, int x, int y) const;
+  void set_large_text(bool large);
 
  private:
   struct Circle {
@@ -123,6 +136,10 @@ class Ui {
   // readable size; the body is then drawn alone.
   bool draw_qr_body(Canvas& c, const UiModel& m, int top, int bottom);
   void draw_bottom(Canvas& c, const UiModel& m);
+  int reading_inset() const;
+  struct Rect { int x, y, w, h; };
+  Rect control_rect(QuickControl control) const;
+  void draw_controls(Canvas& c, const UiModel& m);
   void draw_indicator(Canvas& c, const UiModel& m, int cx, int cy, int r);
   struct HeroGeom {
     int size = 0, x = 0, y = 0;  // mascot

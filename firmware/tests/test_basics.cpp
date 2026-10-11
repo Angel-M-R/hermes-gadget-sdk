@@ -143,6 +143,19 @@ TEST("canvas: word wrap keeps words whole and splits overlong ones") {
   CHECK_EQ(paras[1], std::string());
 }
 
+TEST("canvas: Spanish characters occupy one cell and stay intact across line breaks") {
+  CHECK_EQ(hg::Canvas::text_width("¿Qué?", 2), hg::Canvas::text_width("abcde", 2));
+  auto lines = hg::wrap_text("niño pingüino canción", 5);
+  CHECK_EQ(lines, std::vector<std::string>({"niño", "pingü", "ino", "canci", "ón"}));
+  std::vector<uint16_t> accented(60 * 12, 0), plain(60 * 12, 0);
+  hg::Canvas a(accented.data(), 60, 12, false), p(plain.data(), 60, 12, false);
+  CHECK_EQ(a.text(0, 0, "niño", 1, 0xFFFF), 24);
+  CHECK_EQ(p.text(0, 0, "nino", 1, 0xFFFF), 24);
+  CHECK(accented != plain);
+  // Invalid bytes and an unsupported character cannot run past the canvas.
+  CHECK_EQ(a.text(0, 0, std::string("\xFF") + "😀", 1, 0xFFFF), 12);
+}
+
 TEST("canvas: drawing respects the row clip") {
   std::vector<uint16_t> px(10 * 10, 0);
   hg::Canvas c(px.data(), 10, 10, false);

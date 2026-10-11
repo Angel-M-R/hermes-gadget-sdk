@@ -3,6 +3,7 @@
 #include <algorithm>
 
 #include "hg/font.hpp"
+#include "hg/text.hpp"
 
 namespace hg {
 
@@ -97,8 +98,9 @@ void Canvas::bitmap1(int x, int y, int w, int h, const uint8_t* bits, uint16_t c
 
 int Canvas::text(int x, int y, std::string_view s, int scale, uint16_t color) {
   if (scale < 1) scale = 1;
-  for (char ch : s) {
-    const char* g = font::glyph(ch);
+  size_t offset = 0;
+  while (offset < s.size()) {
+    const char* g = font::glyph(next_character(s, offset));
     for (int row = 0; row < font::kGlyphHeight; ++row) {
       for (int col = 0; col < font::kGlyphWidth; ++col) {
         if (g[row * font::kGlyphWidth + col] == '#') {
@@ -113,7 +115,7 @@ int Canvas::text(int x, int y, std::string_view s, int scale, uint16_t color) {
 
 int Canvas::text_width(std::string_view s, int scale) {
   if (s.empty()) return 0;
-  return static_cast<int>(s.size()) * font::kCellWidth * scale - scale;
+  return static_cast<int>(text_length(s)) * font::kCellWidth * scale - scale;
 }
 
 int Canvas::line_height(int scale) { return font::kCellHeight * scale; }
@@ -146,16 +148,17 @@ std::vector<std::string> wrap_text(std::string_view text, int max_chars) {
       std::string_view word = para.substr(p, end - p);
       p = end;
       if (word.empty()) continue;
-      while (static_cast<int>(word.size()) > max_chars) {
+      while (static_cast<int>(text_length(word)) > max_chars) {
         if (!line.empty()) {
           lines.push_back(line);
           line.clear();
         }
-        lines.emplace_back(word.substr(0, static_cast<size_t>(max_chars)));
-        word.remove_prefix(static_cast<size_t>(max_chars));
+        const auto part = text_prefix(word, static_cast<size_t>(max_chars));
+        lines.emplace_back(part);
+        word.remove_prefix(part.size());
       }
       if (word.empty()) continue;
-      size_t needed = line.empty() ? word.size() : line.size() + 1 + word.size();
+      size_t needed = line.empty() ? text_length(word) : text_length(line) + 1 + text_length(word);
       if (static_cast<int>(needed) > max_chars) {
         lines.push_back(line);
         line.assign(word);

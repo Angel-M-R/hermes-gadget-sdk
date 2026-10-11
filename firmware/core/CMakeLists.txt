@@ -21,6 +21,7 @@ set(HG_CORE_SOURCES
     src/app.cpp
     src/app_settings.cpp
     src/app_power.cpp
+    src/app_controls.cpp
     src/canvas.cpp
     src/crypto.cpp
     src/font5x7.cpp
@@ -30,6 +31,8 @@ set(HG_CORE_SOURCES
     src/qr.cpp
     src/setup.cpp
     src/touch.cpp
+    src/text.cpp
+    src/locale.cpp
     src/ui.cpp
     src/vad.cpp
 )

@@ -55,7 +55,7 @@ void App::power_tick() {
     return;
   }
   if (!screen_timeout_ms_) return;
-  const bool idle = mode_ == Mode::Idle && !speaking() && !settings_open() && !talk_held_ && !cancel_held_ &&
+  const bool idle = mode_ == Mode::Idle && !speaking() && !settings_open() && !quick_controls_open_ && !talk_held_ && !cancel_held_ &&
                     !prompt_showing() && wifi_setup_text_.empty() && !ota_busy() && ota_ != Ota::Restarting && overlay_ == Overlay::None &&
                     (phase_ == Phase::NoNetwork || (phase_ == Phase::Online && paired_));
   if (!idle) { wake_display(); return; }

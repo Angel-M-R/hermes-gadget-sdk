@@ -26,6 +26,18 @@ def test_open_device_reaches_ready_and_text_round_trips(devserver, make_sim):
     assert sim.wait_screen("ready", timeout=5)
 
 
+def test_spanish_reply_survives_host_shaping_and_device_rendering(devserver, make_sim):
+    hub, _brain, url = devserver()
+    sim = make_sim(url)
+    assert sim.wait_screen("ready", timeout=10)
+    assert next(iter(hub.sessions.values())).charset == "utf8-es"
+    sim.console("set language es")
+    sim.type_text("¿El niño oye una canción? ¡Sí! Pingu\u0308ino.")
+    assert sim.wait_for(lambda: (sim.last_received("turn.end") or {}).get("outcome") == "success", timeout=10)
+    assert sim.last_received("reply")["text"] == "You said: ¿El niño oye una canción? ¡Sí! Pingüino."
+    assert sim.wait_screen("ready", timeout=5)
+
+
 def test_pairing_code_flow(loop_thread, devserver, make_sim):
     hub, brain, url = devserver(require_pairing=True)
     sim = make_sim(url)
@@ -236,6 +248,7 @@ def test_hello_declares_capabilities(devserver, make_sim):
     assert sim.wait_screen("ready", timeout=10)
     hello = next(m for m in sim.sent if m.get("type") == "hello")
     assert hello["proto"] == 1
+    assert hello["caps"]["display"]["charset"] == "utf8-es"
     assert hello["caps"]["display"]["image"]["format"] == "rgb565"
     assert hello["caps"]["mic"] == {"rate": 16000, "format": "pcm16"}
     assert json.dumps(hello)  # serialisable

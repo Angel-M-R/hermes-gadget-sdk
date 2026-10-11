@@ -114,11 +114,19 @@ class App {
   // from Hermes still wakes it.
   void on_power_key();
   // The on-screen speaker button (touch screens with a speaker): holding it
-  // mutes or unmutes, a tap only says so. TouchGestures reports the touch;
+  // mutes or unmutes, a tap opens quick controls. TouchGestures reports the touch;
   // Leave is the finger sliding off, or lifting after a hold.
   enum class SpeakerTouch : uint8_t { Down, Hold, Tap, Leave };
   bool speaker_button_hit(int x, int y) const;
   void on_speaker_button(SpeakerTouch touch);
+  // Local text navigation: never records, sends a request or pauses the speaker.
+  ReadingControl reading_control_hit(int x, int y) const;
+  void on_reading_control(ReadingControl control);
+  bool open_quick_controls();
+  void close_quick_controls();
+  bool quick_controls_open() const { return quick_controls_open_; }
+  QuickControl quick_control_hit(int x, int y) const;
+  void on_quick_control(QuickControl control);
   bool muted() const { return muted_; }
   bool start_wifi_setup();
   void close_wifi_setup();
@@ -247,6 +255,8 @@ class App {
   void log(LogLevel level, std::string_view msg);
   uint32_t now() const { return hal_.system->now_ms(); }
   bool speaking() const;
+  bool play_recording_cue(bool start);
+  const char* tr(const char* english) const { return localized(english, language_); }
   std::string next_id(char prefix);
 
   Hal& hal_;
@@ -264,9 +274,15 @@ class App {
   uint8_t volume_ = 70;
   bool muted_ = false;
   bool speaker_pressed_ = false;  // a finger is on the speaker button
+  bool quick_controls_open_ = false;
+  bool large_text_ = false;
+  Language language_ = Language::English;
+  uint32_t end_silence_ms_ = 900;
+  bool recording_cues_ = false, recording_cue_pending_ = false;
+  uint32_t recording_cue_at_ = 0;
   uint8_t brightness_ = 100;
   enum class Menu : uint8_t { Closed, Volume, Brightness, TalkMode, Microphone, Speaker, Display, Inputs, Info,
-                              Power, IdleTimer, PowerOff, WifiSetup, Back };
+                              Power, IdleTimer, PowerOff, WifiSetup, EndSilence, RecordingCues, TextSize, Language, Back };
   enum class HardwareCheck : uint8_t { None, Microphone, Speaker, Display, Inputs };
   Menu menu_ = Menu::Closed;
   HardwareCheck hardware_check_ = HardwareCheck::None;
@@ -319,6 +335,7 @@ class App {
   uint32_t last_turn_rx_ = 0;
   std::string reply_;
   uint32_t reply_until_ = 0;  // reply text shown on the Ready screen until then
+  bool reading_paused_ = false;  // holds both the page and the reply on screen
   bool cancel_held_ = false;
   bool cancel_long_fired_ = false;
   uint32_t cancel_down_at_ = 0;

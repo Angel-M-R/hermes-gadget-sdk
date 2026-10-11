@@ -65,7 +65,7 @@ Secrets go in `~/.hermes/.env`, following Hermes's rule that `.env` is only for 
 | Turn boundaries | `on_processing_start` / `on_processing_complete` | Become `turn.start` / `turn.end` |
 | Live status | `supports_status_text = True` + `set_status_text()` | Becomes `status` frames |
 | Streaming text | `supports_draft_streaming()` + `send_draft()`; `edit_message()` | Used when streaming is enabled; becomes `reply.delta` |
-| Final replies | `send()` | Markdown stripped and folded to ASCII for small screens |
+| Final replies | `send()` | Markdown stripped and shaped to the declared display charset, including Spanish glyphs on the core |
 | Whole-file TTS | `play_tts()` / `send_voice()` | WAV decoded in Python; other formats through ffmpeg; resampled to the device rate |
 | Streaming TTS | `supports_streaming_tts` / `begin_` / `write_` / `finish_` / `abort_streaming_tts` | PCM chunks forwarded as they are generated, for TTS providers Hermes can stream |
 | Images from the agent | `send_image_file()` / `send_image()` | Converted to RGB565 to fit the screen (needs Pillow) |

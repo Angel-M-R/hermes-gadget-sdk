@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "hg/font.hpp"
+#include "hg/text.hpp"
 
 namespace hg {
 namespace {
@@ -55,9 +56,9 @@ class Hash {
 
 std::string fit(std::string_view s, int max_chars) {
   if (max_chars <= 0) return {};
-  if (static_cast<int>(s.size()) <= max_chars) return std::string(s);
-  if (max_chars <= 2) return std::string(s.substr(0, static_cast<size_t>(max_chars)));
-  return std::string(s.substr(0, static_cast<size_t>(max_chars - 2))) + "..";
+  if (static_cast<int>(text_length(s)) <= max_chars) return std::string(s);
+  if (max_chars <= 2) return std::string(text_prefix(s, static_cast<size_t>(max_chars)));
+  return std::string(text_prefix(s, static_cast<size_t>(max_chars - 2))) + "..";
 }
 
 int cols_for(int width_px, int scale) { return width_px / (font::kCellWidth * scale); }
@@ -216,11 +217,12 @@ const char* screen_name(Screen s) {
     case Screen::Updating: return "updating";
     case Screen::Settings: return "settings";
     case Screen::Setup: return "setup";
+    case Screen::Controls: return "controls";
   }
   return "unknown";
 }
 
-Ui::Ui(Display& display) : display_(display), panel_(display.info()), info_(panel_) {
+Ui::Ui(Display& display, bool touch_screen) : display_(display), panel_(display.info()), info_(panel_) {
   bg_ = panel_.emissive ? rgb565(0, 0, 0) : kTintBg;
   bar_ = panel_.emissive ? rgb565(0, 0, 0) : kTintBar;
   if (panel_.round) {
@@ -233,11 +235,13 @@ Ui::Ui(Display& display) : display_(display), panel_(display.info()), info_(pane
   int w = info_.width, h = info_.height;
   int s = std::max(1, std::min(4, std::min(w / 160, h / 120)));
   layout_.scale = s;
+  layout_.body_scale = s;
   // Rounded glass corners: the bars grow and their text moves towards the middle, clear of the curve.
   const int corner = panel_.round ? 0 : panel_.corner_radius;
   bar_pad_ = corner ? 3 * s : 0;
   layout_.top_h = Canvas::line_height(s) + 2 * s + bar_pad_;
   layout_.bottom_h = layout_.top_h;
+  if (touch_screen) layout_.bottom_h = std::max(layout_.bottom_h, std::min(40, h / 4));
   if (corner) {
     top_inset_ = corner_cut(corner, s + bar_pad_) + s;
     bottom_inset_ = corner_cut(corner, layout_.bottom_h - s - font::kGlyphHeight * s) + s;
@@ -255,6 +259,15 @@ Ui::Ui(Display& display) : display_(display), panel_(display.info()), info_(pane
 }
 
 void Ui::invalidate() { valid_ = false; }
+
+void Ui::set_large_text(bool large) {
+  const int s = layout_.scale;
+  layout_.body_scale = s + (large ? 1 : 0);
+  const int content_h = info_.height - layout_.top_h - layout_.header_h - layout_.bottom_h;
+  layout_.body_cols = cols_for(info_.width - 8 * s, layout_.body_scale);
+  layout_.body_rows = std::max(1, (content_h - 4 * s) / Canvas::line_height(layout_.body_scale));
+  invalidate();
+}
 
 Canvas Ui::canvas() {
   return Canvas(display_.framebuffer() + oy_ * panel_.width + ox_, info_.width, info_.height, info_.swap_bytes,
@@ -283,7 +296,7 @@ void Ui::render(const UiModel& m) {
   speaker_in_header_ = speaker && !m.hero;
 
   uint32_t hashes[4];
-  hashes[0] = Hash().add(m.title).val(m.link).val(m.battery).val(m.charging).val(m.usb_power).get();
+  hashes[0] = Hash().add(m.title).val(m.link).val(m.battery).val(m.charging).val(m.usb_power).val(m.language).get();
   hashes[1] = Hash()
                   .val(m.screen)
                   .add(m.headline)
@@ -295,8 +308,10 @@ void Ui::render(const UiModel& m) {
                   .val(m.speaker_pressed)
                   .get();
   hashes[2] =
-      Hash().val(m.screen).add(m.detail).add(m.body).add(m.qr).add(m.code).val(m.scroll).val(m.color_test).get();
-  hashes[3] = Hash().add(m.hint).get();
+      Hash().val(m.screen).add(m.detail).add(m.body).add(m.qr).add(m.code).val(m.scroll).val(m.color_test)
+            .val(m.volume).val(m.muted).val(m.large_text).val(m.language).get();
+  hashes[3] = Hash().add(m.hint).val(m.reading).val(m.screen).val(m.language)
+                  .val(m.reading != Reading::None ? hashes[2] : 0u).get();
 
   if (m.hero) {
     // Hero mode: top bar, one mascot band, bottom bar.
@@ -382,6 +397,7 @@ void Ui::draw_top(Canvas& c, const UiModel& m) {
     case Link::Connecting: dot = kYellow; label = "LINK"; break;
     case Link::Online: dot = kGreen; label = "ONLINE"; break;
   }
+  label = localized(label, m.language);
   int ty = s + bar_pad_;
   if (panel_.round) {
     // A round face stays quiet: just the link dot, centred, like a watch's status mark.
@@ -496,6 +512,7 @@ void Ui::draw_indicator(Canvas& c, const UiModel& m, int cx, int cy, int r) {
     case Screen::Image:
     case Screen::Settings:
     case Screen::Setup:
+    case Screen::Controls:
       break;
   }
 }
@@ -530,14 +547,15 @@ int Ui::body_rows(const UiModel& m) const {
 }
 
 void Ui::draw_content(Canvas& c, const UiModel& m) {
-  const int s = layout_.scale;
+  const int s = layout_.body_scale;
   const int w = info_.width;
   const int y0 = layout_.top_h + layout_.header_h;
   const int y1 = info_.height - layout_.bottom_h;
-  const int margin = 4 * s;
+  const int margin = 4 * layout_.scale;
   const int lh = Canvas::line_height(s);
   c.fill_rect(0, y0, w, y1 - y0, bg_);
   int y = y0 + margin;
+  if (m.screen == Screen::Controls) { draw_controls(c, m); return; }
 
   if (m.color_test) {
     const uint16_t colors[] = {rgb565(255, 0, 0), rgb565(0, 255, 0), rgb565(0, 0, 255),
@@ -607,7 +625,10 @@ bool Ui::draw_qr_body(Canvas& c, const UiModel& m, int top, int bottom) {
   const int avail_w = info_.width - 2 * margin, avail_h = bottom - margin - top;
   // A word must not break across lines: the setup address is one long word.
   int longest = 0, word = 0;
-  for (char ch : m.body + " ") {
+  const std::string words = m.body + " ";
+  size_t offset = 0;
+  while (offset < words.size()) {
+    const uint32_t ch = next_character(words, offset);
     if (ch == ' ' || ch == '\n') word = 0;
     else longest = std::max(longest, ++word);
   }
@@ -861,10 +882,108 @@ void Ui::draw_key_marks(Canvas& c, const UiModel& m, const HeroGeom& g) {
     glyph(c, x, y, kPower, s, kDim);
 }
 
+int Ui::reading_inset() const {
+  return std::max(2 * layout_.scale + bottom_inset_, panel_.round ? 0 : int(panel_.corner_radius));
+}
+
+Ui::Rect Ui::control_rect(QuickControl control) const {
+  const int s = layout_.scale, inset = reading_inset(), width = info_.width - 2 * inset;
+  if (control == QuickControl::Close)
+    return {inset, info_.height - layout_.bottom_h, width, layout_.bottom_h};
+  const int top = layout_.top_h + layout_.header_h + 2 * s;
+  const int row = (info_.height - layout_.bottom_h - top - 2 * s) / 2;
+  const bool text = control == QuickControl::TextNormal || control == QuickControl::TextLarge;
+  const int column = control == QuickControl::VolumeUp ? 2
+                     : control == QuickControl::Mute || control == QuickControl::TextLarge ? 1 : 0;
+  // Leave room for the mute label in both languages; +/- need less width.
+  const int audio_edges[] = {0, 1, 4, 5};
+  const int left = inset + width * (text ? column : audio_edges[column]) / (text ? 2 : 5);
+  const int right = inset + width * (text ? column + 1 : audio_edges[column + 1]) / (text ? 2 : 5);
+  return {left, top + (text ? row : 0) + Canvas::line_height(s), right - left,
+          std::max(1, row - Canvas::line_height(s) - 2 * s)};
+}
+
+QuickControl Ui::control_hit(const UiModel& m, int x, int y) const {
+  if (m.screen != Screen::Controls) return QuickControl::None;
+  x -= ox_; y -= oy_;
+  for (auto control : {QuickControl::VolumeDown, QuickControl::Mute, QuickControl::VolumeUp,
+                       QuickControl::TextNormal, QuickControl::TextLarge, QuickControl::Close}) {
+    if (!m.speaker_button && (control == QuickControl::VolumeDown || control == QuickControl::VolumeUp ||
+                             control == QuickControl::Mute)) continue;
+    const auto r = control_rect(control);
+    if (x >= r.x && x < r.x + r.w && y >= r.y && y < r.y + r.h) return control;
+  }
+  return QuickControl::None;
+}
+
+void Ui::draw_controls(Canvas& c, const UiModel& m) {
+  const int s = layout_.scale, top = layout_.top_h + layout_.header_h + 2 * s;
+  const int row = (info_.height - layout_.bottom_h - top - 2 * s) / 2;
+  const std::string volume = std::string(localized("Volume", m.language)) + " " +
+                             (m.speaker_button ? std::to_string(m.volume) + "%" : localized("Unavailable", m.language));
+  c.text(reading_inset(), top, fit(volume, layout_.hero_cols), s, kDim);
+  c.text(reading_inset(), top + row, localized("Text size", m.language), s, kDim);
+  for (auto control : {QuickControl::VolumeDown, QuickControl::Mute, QuickControl::VolumeUp,
+                       QuickControl::TextNormal, QuickControl::TextLarge}) {
+    const auto r = control_rect(control);
+    const char* label = control == QuickControl::VolumeDown ? "-" : control == QuickControl::VolumeUp ? "+"
+                        : control == QuickControl::Mute ? (m.muted ? "Unmute" : "Mute")
+                        : control == QuickControl::TextNormal ? "Normal" : "Large";
+    const bool audio = control == QuickControl::VolumeDown || control == QuickControl::VolumeUp || control == QuickControl::Mute;
+    const bool selected = (control == QuickControl::Mute && m.muted) ||
+                          (control == QuickControl::TextNormal && !m.large_text) ||
+                          (control == QuickControl::TextLarge && m.large_text);
+    c.fill_rect(r.x + s, r.y, r.w - 2 * s, r.h, selected ? kAccentDim : kButton);
+    const auto text = fit(localized(label, m.language), cols_for(r.w - 4 * s, s));
+    c.text(r.x + (r.w - Canvas::text_width(text, s)) / 2,
+           r.y + (r.h - font::kGlyphHeight * s) / 2, text, s, audio && !m.speaker_button ? kFaint : kText);
+  }
+}
+
+ReadingControl Ui::reading_hit(const UiModel& m, int x, int y) const {
+  const int inset = reading_inset(), width = info_.width - 2 * inset;
+  x -= ox_ + inset;
+  y -= oy_;
+  if (m.reading == Reading::None || x < 0 || x >= width ||
+      y < info_.height - layout_.bottom_h || y >= info_.height)
+    return ReadingControl::None;
+  if (m.reading == Reading::Recall) return ReadingControl::Recall;
+  if (x < width / 4) return ReadingControl::Previous;
+  if (x >= width * 3 / 4) return ReadingControl::Next;
+  return ReadingControl::TogglePause;
+}
+
 void Ui::draw_bottom(Canvas& c, const UiModel& m) {
   const int s = layout_.scale;
   const int y0 = info_.height - layout_.bottom_h;
   c.fill_rect(0, y0, info_.width, layout_.bottom_h, panel_.round ? bg_ : bar_);
+  if (m.screen == Screen::Controls) {
+    const auto r = control_rect(QuickControl::Close);
+    c.fill_rect(r.x + s, r.y + s, r.w - 2 * s, r.h - 2 * s, kButton);
+    const char* label = localized("Done", m.language);
+    c.text(r.x + (r.w - Canvas::text_width(label, s)) / 2,
+           r.y + (r.h - font::kGlyphHeight * s) / 2, label, s, kText);
+    return;
+  }
+  if (m.reading != Reading::None) {
+    const int inset = reading_inset(), width = info_.width - 2 * inset;
+    auto button = [&](int left, int right, const char* label, uint16_t color) {
+      c.fill_rect(left + s, y0 + s, right - left - 2 * s, layout_.bottom_h - 2 * s, kButton);
+      const std::string text = fit(label, cols_for(right - left - 4 * s, s));
+      c.text((left + right - Canvas::text_width(text, s)) / 2,
+             y0 + (layout_.bottom_h - font::kGlyphHeight * s) / 2, text, s, color);
+    };
+    if (m.reading == Reading::Recall) {
+      button(inset, inset + width, localized("Last reply", m.language), kText);
+    } else {
+      const int last = std::max(0, static_cast<int>(wrap_text(m.body, layout_.body_cols).size()) - body_rows(m));
+      button(inset, inset + width / 4, "<", m.scroll > 0 ? kText : kFaint);
+      button(inset + width / 4, inset + width * 3 / 4,
+             localized(m.reading == Reading::Paused ? "Auto pages" : "Pause text", m.language), kAccent);
+      button(inset + width * 3 / 4, inset + width, ">", m.scroll < last ? kText : kFaint);
+    }
+    return;
+  }
   std::string hint = fit(m.hint, cols_for(info_.width - 4 * s - 2 * bottom_inset_, s));
   c.text((info_.width - Canvas::text_width(hint, s)) / 2, y0 + s, hint, s, kDim);
 }

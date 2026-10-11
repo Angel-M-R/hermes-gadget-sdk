@@ -35,6 +35,9 @@ void TouchGestures::update(bool touching, int x, int y, uint32_t now_ms) {
       case State::Swipe: release(Button::Cancel); break;
       case State::Speaker: app_.on_speaker_button(App::SpeakerTouch::Tap); break;
       case State::SpeakerHeld: app_.on_speaker_button(App::SpeakerTouch::Leave); break;
+      case State::Reading: app_.on_reading_control(reading_control_); break;
+      case State::Control: app_.on_quick_control(quick_control_); break;
+      case State::Settings: app_.open_quick_controls(); break;
       default: break;
     }
     state_ = State::Idle;
@@ -43,11 +46,18 @@ void TouchGestures::update(bool touching, int x, int y, uint32_t now_ms) {
 
   if (state_ == State::Idle) {
     if (app_.wake_display()) { state_ = State::Ignored; return; }
-    if (app_.speaker_button_hit(x, y)) {
+    reading_control_ = app_.reading_control_hit(x, y);
+    quick_control_ = app_.quick_control_hit(x, y);
+    if (quick_control_ != QuickControl::None) {
+      state_ = State::Control;
+    } else if (reading_control_ != ReadingControl::None) {
+      state_ = State::Reading;
+    } else if (app_.speaker_button_hit(x, y)) {
       state_ = State::Speaker;
       app_.on_speaker_button(App::SpeakerTouch::Down);
     } else {
-      state_ = app_.settings_title_hit(x, y) ? State::Settings : State::Pending;
+      state_ = app_.settings_title_hit(x, y) ? State::Settings
+               : app_.quick_controls_open() ? State::Ignored : State::Pending;
     }
     x0_ = x;
     y0_ = y;
@@ -59,6 +69,16 @@ void TouchGestures::update(bool touching, int x, int y, uint32_t now_ms) {
   const bool swiped_down = (cfg_.swipe_cancel || app_.settings_open() || app_.wifi_setup_open()) &&
                           dy >= cfg_.swipe_px && std::abs(dx) < dy;
   switch (state_) {
+    case State::Control:
+      if (std::abs(dx) > cfg_.slop_px || std::abs(dy) > cfg_.slop_px ||
+          app_.quick_control_hit(x, y) != quick_control_)
+        state_ = State::Ignored;
+      break;
+    case State::Reading:
+      if (std::abs(dx) > cfg_.slop_px || std::abs(dy) > cfg_.slop_px ||
+          app_.reading_control_hit(x, y) != reading_control_)
+        state_ = State::Ignored;
+      break;
     case State::Speaker:
       if (std::abs(dx) <= cfg_.slop_px && std::abs(dy) <= cfg_.slop_px) {
         promote(now_ms, 0);

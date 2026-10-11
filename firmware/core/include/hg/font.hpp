@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cstdint>
+
 namespace hg::font {
 
 constexpr int kGlyphWidth = 5;
@@ -9,7 +11,7 @@ constexpr int kCellWidth = 6;
 constexpr int kCellHeight = 9;
 
 // Row-major glyph pixels: kGlyphWidth * kGlyphHeight chars, '#' = on.
-// Non-printable / non-ASCII bytes map to '?'.
-const char* glyph(char c);
+// ASCII and Spanish accented letters/punctuation; unsupported characters use '?'.
+const char* glyph(uint32_t codepoint);
 
 }  // namespace hg::font

@@ -391,4 +391,4 @@ Machine-readable lines start with `@`, so tools can drive a bench device. `herme
 - Push-to-talk or tap with energy VAD. There is no wake word; the protocol leaves room for one (`audio.start.mode`).
 - Wi-Fi setup works over USB or a temporary password-protected network. There is no BLE setup or dedicated phone app.
 - Firmware updates are authorized with the device key, but images aren't signed: the bootloader runs whatever a trusted Hermes installs. Secure Boot isn't enabled.
-- The text font is ASCII only; the host folds other characters.
+- The text font covers ASCII and Spanish letters and punctuation; the host folds or removes unsupported characters.

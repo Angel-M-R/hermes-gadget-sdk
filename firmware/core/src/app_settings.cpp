@@ -13,6 +13,7 @@ bool App::open_settings() {
   if (prompt_showing() || ota_busy() || ota_ == Ota::Restarting || !wifi_setup_text_.empty()) return false;
   wake_display();
   if (settings_open()) { close_settings(); return true; }
+  quick_controls_open_ = false;
   if (mode_ == Mode::Listening) cancel_listening("local settings");
   else if (mode_ == Mode::Thinking || mode_ == Mode::Responding) cancel_turn();
   stop_playback();
@@ -67,13 +68,13 @@ void App::settings_input(Button button, bool pressed) {
                                    : (button == Button::Up ? Menu::IdleTimer : Menu::WifiSetup);
     }
     if (!on_wifi_setup && menu_ == Menu::WifiSetup)
-      menu_ = button == Button::Up ? (can_power_off ? Menu::PowerOff : Menu::IdleTimer) : Menu::Back;
+      menu_ = button == Button::Up ? (can_power_off ? Menu::PowerOff : Menu::IdleTimer) : Menu::EndSilence;
     return;
   }
   if (button != Button::Talk || pressed) return;
   if (hardware_check_ != HardwareCheck::None) {
     stop_hardware_check();
-    check_result_ = "Check stopped";
+    check_result_ = tr("Check stopped");
     return;
   }
   check_result_.clear();
@@ -90,9 +91,15 @@ void App::settings_input(Button button, bool pressed) {
     case Menu::TalkMode:
       if (hal_.mic) console(talk_mode_ == TalkMode::Hold ? "set talk_mode tap" : "set talk_mode hold");
       break;
+    case Menu::EndSilence:
+      console("set end_silence_ms " + std::to_string(end_silence_ms_ < 1500 ? 1500 : end_silence_ms_ < 2400 ? 2400 : 900));
+      break;
+    case Menu::RecordingCues: console(recording_cues_ ? "set recording_cues 0" : "set recording_cues 1"); break;
+    case Menu::TextSize: console(large_text_ ? "set text_size normal" : "set text_size large"); break;
+    case Menu::Language: console(language_ == Language::Spanish ? "set language en" : "set language es"); break;
     case Menu::Microphone:
       if (hal_.mic && hal_.mic->start(profile_.mic_rate)) hardware_check_ = HardwareCheck::Microphone;
-      else check_result_ = "Microphone unavailable";
+      else check_result_ = tr("Microphone unavailable");
       break;
     case Menu::Speaker:
       if (hal_.speaker && hal_.speaker->begin(profile_.speaker_rate)) {
@@ -104,16 +111,16 @@ void App::settings_input(Button button, bool pressed) {
         hal_.speaker->write(tone.data(), tone.size());
         hal_.speaker->end();
         hardware_check_ = HardwareCheck::Speaker;
-        check_result_ = "Listen for a short tone";
-      } else check_result_ = "Speaker unavailable";
+        check_result_ = tr("Listen for a short tone");
+      } else check_result_ = tr("Speaker unavailable");
       break;
     case Menu::Display:
       if (hal_.display) hardware_check_ = HardwareCheck::Display;
-      else check_result_ = "Display unavailable";
+      else check_result_ = tr("Display unavailable");
       break;
     case Menu::Inputs:
       hardware_check_ = HardwareCheck::Inputs;
-      check_result_ = "Press a button. Release Cancel to leave.";
+      check_result_ = tr("Press a button. Release Cancel to leave.");
       break;
     case Menu::IdleTimer: {
       const uint32_t seconds = screen_timeout_ms_ / 1000;
@@ -124,10 +131,10 @@ void App::settings_input(Button button, bool pressed) {
     case Menu::PowerOff:
       if (!power_off_armed_) {
         power_off_armed_ = true;
-        check_result_ = "Select again to power off. Cancel goes back.";
+        check_result_ = tr("Select again to power off. Cancel goes back.");
       } else {
         power_off_armed_ = false;
-        check_result_ = hal_.power->power_off() ? "Power-off requested" : "Power-off failed. Try the physical PWR key.";
+        check_result_ = hal_.power->power_off() ? tr("Power-off requested") : tr("Power-off failed. Try the physical PWR key.");
       }
       break;
     case Menu::Back: close_settings(); break;
@@ -149,7 +156,7 @@ void App::settings_tick() {
   if (hardware_check_ == HardwareCheck::Speaker && !hal_.speaker->busy()) {
     hardware_check_ = HardwareCheck::None;
     apply_volume();  // the tone played at the saved volume even if muted
-    check_result_ = "Tone finished. Did you hear it?";
+    check_result_ = tr("Tone finished. Did you hear it?");
     update_model();
   }
 }
@@ -157,81 +164,97 @@ void App::settings_tick() {
 void App::settings_model() {
   UiModel& m = model_;
   m.screen = Screen::Settings;
-  m.headline = "Settings";
+  m.headline = tr("Settings");
   m.scroll = 0;
   m.speaking = false;
-  m.hint = profile_.touch_screen ? "Tap: change | Swipe: next"
-                                : profile_.talk_label + ": change | " + profile_.cancel_label + ": next";
+  m.hint = profile_.touch_screen ? tr("Tap: change | Swipe: next")
+                                : profile_.talk_label + tr(": change | ") + profile_.cancel_label + tr(": next");
   switch (menu_) {
     case Menu::Volume:
-      m.detail = "Speaker volume";
-      m.body = !hal_.speaker ? "No speaker driver is active."
-               : muted_       ? std::to_string(volume_) + "%, muted\n" +
-                                    (profile_.touch_screen ? "Leave settings, then hold the speaker icon to unmute." : "Console: set mute 0")
-                              : std::to_string(volume_) + "%\nChanges are saved.";
+      m.detail = tr("Speaker volume");
+      m.body = !hal_.speaker ? tr("No speaker driver is active.")
+               : muted_       ? std::to_string(volume_) + tr("%, muted\n") +
+                                    (profile_.touch_screen ? tr("Leave settings, then hold the speaker icon to unmute.") : "Console: set mute 0")
+                              : std::to_string(volume_) + tr("%\nChanges are saved.");
       break;
     case Menu::Brightness:
-      m.detail = "Screen brightness";
-      m.body = hal_.display && hal_.display->info().has_backlight ? std::to_string(brightness_) + "%\nChanges are saved."
-                                                               : "Brightness control is unavailable.";
+      m.detail = tr("Screen brightness");
+      m.body = hal_.display && hal_.display->info().has_backlight ? std::to_string(brightness_) + tr("%\nChanges are saved.")
+                                                               : tr("Brightness control is unavailable.");
       break;
     case Menu::TalkMode:
-      m.detail = "Talk mode";
-      m.body = !hal_.mic ? "No microphone driver is active." : talk_mode_ == TalkMode::Hold ? "Hold to record; release to send."
-                                                                                         : "Tap to record; pause or tap to send.";
+      m.detail = tr("Talk mode");
+      m.body = !hal_.mic ? tr("No microphone driver is active.") : talk_mode_ == TalkMode::Hold ? tr("Hold to record; release to send.")
+                                                                                         : tr("Tap to record; pause or tap to send.");
+      break;
+    case Menu::EndSilence:
+      m.detail = tr("Pause before sending");
+      m.body = std::to_string(end_silence_ms_) + " ms\n" + tr("In tap mode, send after this much silence. Tap again to send sooner.");
+      break;
+    case Menu::RecordingCues:
+      m.detail = tr("Recording sounds");
+      m.body = std::string(recording_cues_ ? tr("On") : tr("Off")) + "\n" + tr("Quiet start/end tones. Muting the speaker also mutes these sounds.");
+      break;
+    case Menu::TextSize:
+      m.detail = tr("Text size");
+      m.body = large_text_ ? tr("Large") : tr("Normal");
+      break;
+    case Menu::Language:
+      m.detail = tr("Language");
+      m.body = language_ == Language::Spanish ? "Español" : "English";
       break;
     case Menu::Microphone:
-      m.detail = "Microphone check";
-      m.body = hardware_check_ == HardwareCheck::Microphone ? "Speak now. Level: " + std::to_string(level_) + "%\nLocal only. Nothing is sent."
-                                                          : "Start to check the microphone level. No recording is saved or sent.";
+      m.detail = tr("Microphone check");
+      m.body = hardware_check_ == HardwareCheck::Microphone ? tr("Speak now. Level: ") + std::to_string(level_) + tr("%\nLocal only. Nothing is sent.")
+                                                          : tr("Start to check the microphone level. No recording is saved or sent.");
       break;
     case Menu::Speaker:
-      m.detail = "Speaker check";
-      m.body = "Start to play a short tone at the current volume.";
+      m.detail = tr("Speaker check");
+      m.body = tr("Start to play a short tone at the current volume.");
       break;
     case Menu::Display:
-      m.detail = "Display check";
-      m.body = "Start to show red, green, blue, white and black bands.";
+      m.detail = tr("Display check");
+      m.body = tr("Start to show red, green, blue, white and black bands.");
       m.color_test = hardware_check_ == HardwareCheck::Display;
       break;
     case Menu::Inputs:
-      m.detail = "Input check";
-      m.body = "Start to check the controls. Cancel leaves this check.";
+      m.detail = tr("Input check");
+      m.body = tr("Start to check the controls. Cancel leaves this check.");
       break;
     case Menu::Info:
-      m.detail = "Device information";
-      m.body = profile_.board + "\nFirmware " + profile_.firmware + "\n" + device_id_ + "\nMicrophone: " +
-               (hal_.mic ? "available" : "unavailable") + "\nSpeaker: " + (hal_.speaker ? "available" : "unavailable");
+      m.detail = tr("Device information");
+      m.body = profile_.board + "\nFirmware " + profile_.firmware + "\n" + device_id_ + tr("\nMicrophone: ") +
+               (hal_.mic ? tr("available") : tr("unavailable")) + tr("\nSpeaker: ") + (hal_.speaker ? tr("available") : tr("unavailable"));
       break;
     case Menu::Power:
-      m.detail = "Battery and power";
-      if (!power_status_) m.body = "Power readings unavailable.";
+      m.detail = tr("Battery and power");
+      if (!power_status_) m.body = tr("Power readings unavailable.");
       else {
         const auto& p = *power_status_;
-        if (p.battery_present && !*p.battery_present) m.body = "No battery detected.\n";
-        if (p.battery_percent) m.body += std::to_string(*p.battery_percent) + "% (gauge estimate)\n";
+        if (p.battery_present && !*p.battery_present) m.body = tr("No battery detected.\n");
+        if (p.battery_percent) m.body += std::to_string(*p.battery_percent) + tr("% (gauge estimate)\n");
         if (p.battery_mv) m.body += std::to_string(*p.battery_mv) + " mV\n";
-        if (p.charging) m.body += *p.charging ? "Charging\n" : "Not charging\n";
-        if (p.external_power) m.body += *p.external_power ? "USB power\n" : "No USB power\n";
-        if (p.battery_percent && *p.battery_percent <= 10 && p.external_power == false) m.body += "Low battery: connect USB.";
+        if (p.charging) m.body += *p.charging ? tr("Charging\n") : tr("Not charging\n");
+        if (p.external_power) m.body += *p.external_power ? tr("USB power\n") : tr("No USB power\n");
+        if (p.battery_percent && *p.battery_percent <= 10 && p.external_power == false) m.body += tr("Low battery: connect USB.");
       }
       break;
     case Menu::IdleTimer:
-      m.detail = "Screen timeout";
-      m.body = screen_timeout_ms_ ? std::to_string(screen_timeout_ms_ / 1000) + " seconds\nDims halfway; first input wakes."
-                                 : "Always on\nSelect to enable automatic dimming and screen sleep.";
+      m.detail = tr("Screen timeout");
+      m.body = screen_timeout_ms_ ? std::to_string(screen_timeout_ms_ / 1000) + tr(" seconds\nDims halfway; first input wakes.")
+                                 : tr("Always on\nSelect to enable automatic dimming and screen sleep.");
       break;
     case Menu::PowerOff:
-      m.detail = "Power off";
-      m.body = "Shut down the board. Use its PWR key to turn it on again.";
+      m.detail = tr("Power off");
+      m.body = tr("Shut down the board. Use its PWR key to turn it on again.");
       break;
     case Menu::WifiSetup:
-      m.detail = "Wi-Fi setup";
-      m.body = "Start a temporary network to configure this device with your phone.";
+      m.detail = tr("Wi-Fi setup");
+      m.body = tr("Start a temporary network to configure this device with your phone.");
       break;
     case Menu::Back:
-      m.detail = "Back to Hermes";
-      m.body = "Select to close settings.";
+      m.detail = tr("Back to Hermes");
+      m.body = tr("Select to close settings.");
       break;
     case Menu::Closed: break;
   }
@@ -240,6 +263,7 @@ void App::settings_model() {
 
 bool App::start_wifi_setup() {
   if (!on_wifi_setup || prompt_showing() || ota_busy() || ota_ == Ota::Restarting) return false;
+  quick_controls_open_ = false;
   if (mode_ == Mode::Listening) cancel_listening("Wi-Fi setup");
   else if (mode_ != Mode::Idle) cancel_turn();
   stop_playback();
@@ -252,7 +276,7 @@ bool App::start_wifi_setup() {
   WifiSetup setup = on_wifi_setup();
   wifi_setup_text_ = std::move(setup.text);
   wifi_setup_code_ = wifi_setup_text_.empty() ? std::string() : std::move(setup.join_code);
-  if (wifi_setup_text_.empty()) set_hint_flash("Wi-Fi setup unavailable; use USB");
+  if (wifi_setup_text_.empty()) set_hint_flash(tr("Wi-Fi setup unavailable; use USB"));
   update_model();
   return !wifi_setup_text_.empty();
 }

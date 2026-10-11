@@ -26,6 +26,13 @@ def test_typography_and_accents_fold_to_ascii_and_emoji_drop():
     assert out == "Cafe \"quoted\" - it's 20 degC"
 
 
+def test_spanish_display_keeps_accents_and_normalizes_combining_characters():
+    text = "**¿Qué tal, niño?** ¡Pingüino! Cafe\u0301 — 20°C 😀"
+    assert textfmt.for_device(text, "utf8-es") == "¿Qué tal, niño? ¡Pingüino! Café - 20 degC"
+    assert textfmt.for_device(text) == "Que tal, nino? Pinguino! Cafe - 20 degC"
+    assert textfmt.for_device("ÁÉÍÓÚÜÑ áéíóúüñ ¿¡", "utf8-es") == "ÁÉÍÓÚÜÑ áéíóúüñ ¿¡"
+
+
 def test_think_blocks_never_reach_the_screen():
     assert textfmt.for_device("<think>secret plan</think>Answer") == "Answer"
 

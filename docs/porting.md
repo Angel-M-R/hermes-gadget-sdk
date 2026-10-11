@@ -105,7 +105,9 @@ Boards like the ESP32-S3-BOX family and the ESP32-S3-Touch-AMOLED-1.75 route aud
 
 `App::on_button(Button, pressed)` takes four logical buttons: `Talk`, `Cancel`, `Up`, `Down`. Map any physical input onto them:
 
-- **Touch screen:** `hg::TouchGestures` (`firmware/core/include/hg/touch.hpp`) turns raw touch samples into the buttons: hold anywhere is `Talk`, a quick tap answers "yes", a swipe down is `Cancel`. Feed it from the touch driver and set `DeviceProfile::touch_screen` so the hints say "Hold the screen to talk". `port_touch.cpp` does this for a CST9217.
+- **Touch screen:** `hg::TouchGestures` (`firmware/core/include/hg/touch.hpp`) turns raw touch samples into the buttons: hold the text or mascot for `Talk`, a quick tap answers "yes", a swipe down is `Cancel`. Feed it from the touch driver and set `DeviceProfile::touch_screen` so the hints say "Hold the screen to talk". `port_touch.cpp` does this for a CST9217. The title, speaker and reply-reading bar handle their own touches before TALK gestures. The reading bar pauses text, changes pages and recalls the last reply through `App`; it does not send TALK events. Pass unmodified panel coordinates so its hit areas match the renderer on round panels too.
+
+  A title or speaker tap opens quick controls; a one-second title hold opens full settings. Quick-control touches never become TALK events. Their volume buttons are disabled without a speaker. Large reply text preserves the control geometry. Recording cues use the existing speaker HAL and discard mic samples until `Speaker::busy()` reports that the start tone has drained; verify that behavior and acoustic pickup on physical hardware when enabling the sounds.
 - **Rotary encoder:** detents → `Up` / `Down`; push → `Talk`.
 - **A single button:** `Talk` only. Long-press handling for `Cancel` belongs in the port.
 
