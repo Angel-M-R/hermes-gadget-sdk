@@ -158,8 +158,8 @@ def _cmd_update(args) -> None:
     while time.monotonic() < deadline:
         status = queue.status(device_id) or {}
         if status.get("stage_id") != stage_id:
-            replacement = queue.load(device_id)
-            if replacement and replacement[1].get("stage_id") != stage_id:
+            staged = queue.metadata(device_id)
+            if staged and staged.get("stage_id") != stage_id:
                 sys.exit("This update was replaced by another staged image.")
             status = {}
         state = status.get("state")

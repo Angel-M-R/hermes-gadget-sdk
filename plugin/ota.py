@@ -246,6 +246,11 @@ class UpdateQueue:
         with self._lock(device_id):
             return self._load(device_id)
 
+    def metadata(self, device_id: str) -> Optional[dict]:
+        """What is staged for ``device_id``, without reading the image."""
+        with self._lock(device_id):
+            return self._metadata(device_id)
+
     def count_attempt(self, device_id: str, expected_id: str | None = None) -> int:
         with self._lock(device_id):
             meta = self._metadata(device_id)

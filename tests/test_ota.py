@@ -233,6 +233,33 @@ def test_hermes_gadget_update_stages_and_waits_for_the_gateway(cli_store, monkey
     assert "sending: 50%" in out and "Installed 0.2.0. Desk restarts into it" in out
 
 
+def test_waiting_for_an_offline_device_does_not_reread_the_firmware(cli_store, monkeypatch):
+    from hermes_gadget_plugin import cli
+
+    store, firmware = cli_store
+    store.enroll(DEVICE_ID, KEY, name="Desk", board="sim-320x240")
+    queue = ota.UpdateQueue(store.path.parent)
+    image_path = queue._path(DEVICE_ID, ".bin")
+    read_bytes = type(image_path).read_bytes
+
+    def guarded_read(path):
+        if path == image_path:
+            pytest.fail("waiting must not allocate the staged firmware image")
+        return read_bytes(path)
+
+    polls = []
+    def offline_then_replaced(_):
+        polls.append(1)
+        if len(polls) == 3:  # another image is staged while this command waits
+            queue.stage(DEVICE_ID, ota.inspect_image(fake_image(board="sim-320x240", version="0.2.1")))
+    monkeypatch.setattr(type(image_path), "read_bytes", guarded_read)
+    monkeypatch.setattr(cli.time, "sleep", offline_then_replaced)
+    with pytest.raises(SystemExit) as stop:
+        cli._cmd_update(types.SimpleNamespace(latest=False, force=False, device=DEVICE_ID, image=str(firmware), no_wait=False, timeout=30))
+    assert "replaced by another staged image" in str(stop.value)
+    assert len(polls) == 3
+
+
 def test_hermes_gadget_update_refuses_another_boards_image(cli_store):
     from hermes_gadget_plugin import cli
 

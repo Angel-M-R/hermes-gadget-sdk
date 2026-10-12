@@ -6,7 +6,7 @@
 
 - Integrate upstream/main at `66b4af0f51485830b9598669869a82374d5fcb2a`: AMOLED-1.75C battery curves, the optional per-device battery log, battery indicator follow-ups and a dark screen that stays dark through reconnects. A screen turned off with PWR now also stays off while Wi-Fi or Hermes drops and comes back; prompts, Wi-Fi setup and updates still wake it.
 
-- Retry Windows file-lock contention without a ten-attempt cutoff, retain encoder detents while the app queue is full, stop on failed CPU frequency locks, and avoid rereading firmware images for OTA status updates. Clarify pairing-code expiry and simulator write errors.
+- Retry Windows file-lock contention without a ten-attempt cutoff, retain encoder detents while the app queue is full, stop on failed CPU frequency locks, and avoid rereading firmware images for OTA status updates or while `hermes gadget update` waits for an offline device. Clarify pairing-code expiry and simulator write errors.
 
 - Address PR #4 review findings: serialize device and OTA files across processes, keep active pending gadgets visible, restore Linux releases after start failures, harden QR/NVS bounds, preserve partial audio transfers, queue encoder edges and clean up failed display initialization. Simulator storage failures are propagated with ABI 7. Hardware behavior remains subject to physical validation.
 

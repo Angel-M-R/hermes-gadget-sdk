@@ -135,3 +135,11 @@ Merged `Adolanium/hermes-gadget-sdk` main at `66b4af0f51485830b9598669869a82374d
 Before this push, the 16 unresolved threads were rechecked against the current source. The source matches the dispositions recorded above for items 10, 12, 21, 30, 34, 42, 46, 49 and 61–65, the THIRD_PARTY_NOTICES.md:31 follow-up and the port_touch.cpp encoder follow-up. Item 31 intentionally keeps the upstream AMOLED-1.8 fixed-frequency policy.
 
 Validation after the merge: 207 core cases plus the locked-version QR executable; 286 Python tests passed with 40 environment-dependent skips on macOS; 45 pinned-Hermes cases including the gateway end-to-end run; 29 site tests and 19 guide pages; AMOLED-1.75C and AMOLED-1.8 ESP-IDF builds; version agreement and `git diff --check`. No board was flashed.
+
+## Review of e6395f3
+
+Greptile's second review (confidence 5/5) left one P2 finding.
+
+- [plugin/cli.py:162](https://github.com/Angel-M-R/hermes-gadget-sdk/pull/4#discussion_r4249569040): while the device was offline, `hermes gadget update` checked for a replacement with `UpdateQueue.load()`, reading the whole image under the device lock every second. It now uses `UpdateQueue.metadata()`, which reads only the staged JSON under the same lock. A new regression test fails on any image read while the command waits, and a replacement staged during the wait is still reported. It failed before the change and passes after it.
+
+Validation: 287 Python tests passed with 40 environment-dependent skips on macOS; 45 pinned-Hermes cases passed, including the gateway end-to-end run. No firmware or documentation behavior changed.
