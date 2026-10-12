@@ -148,7 +148,7 @@ def _cmd_update(args) -> None:
         sys.exit(f"{source} is built for {image.board}, but {name} is {board}.")
 
     queue = UpdateQueue(store.path.parent)
-    queue.stage(device_id, image)
+    stage_id = queue.stage(device_id, image)
     print(f"Staged firmware {image.version} ({image.size // 1024} KB) for {name} ({device_id}).")
     if args.no_wait:
         print("The gateway installs it when the device is online.")
@@ -157,6 +157,11 @@ def _cmd_update(args) -> None:
     deadline, last = time.monotonic() + args.timeout, None
     while time.monotonic() < deadline:
         status = queue.status(device_id) or {}
+        if status.get("stage_id") != stage_id:
+            replacement = queue.load(device_id)
+            if replacement and replacement[1].get("stage_id") != stage_id:
+                sys.exit("This update was replaced by another staged image.")
+            status = {}
         state = status.get("state")
         line = {
             "sending": f"  sending: {status.get('sent', 0) * 100 // max(1, status.get('size', 1))}%",
@@ -227,8 +232,12 @@ def _cmd_pair(args) -> None:
         time.sleep(1)
 
     if args.device:
-        chosen = [w for w in waiting
-                  if w[0] == args.device or (w[1].get("name") or "").lower() == args.device.lower()]
+        chosen = [w for w in waiting if w[0] == args.device]
+        if not chosen:
+            chosen = [w for w in waiting if (w[1].get("name") or "").lower() == args.device.lower()]
+        if len(chosen) > 1:
+            sys.exit(f"{args.device} matches several gadgets; use a device ID: "
+                     + ", ".join(w[0] for w in chosen))
         if not chosen:
             sys.exit(f"{args.device} is not waiting to pair. Waiting: "
                      + ", ".join(f"{rec.get('name') or device_id} ({device_id})" for device_id, rec, _ in waiting))

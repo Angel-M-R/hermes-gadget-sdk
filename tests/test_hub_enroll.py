@@ -72,6 +72,49 @@ def test_a_device_admitted_without_pairing_is_never_pending(devserver):
     assert hub.store.devices()[device_id]["pending"] is False
 
 
+def test_approved_new_device_bypasses_pending_limit(devserver, monkeypatch):
+    monkeypatch.setattr(hubmod, "MAX_PENDING_DEVICES", 0)
+    hub, brain, url = devserver(require_pairing=False)
+    device_id, welcome = _enroll(url, "allowed")
+    assert welcome["type"] == "welcome" and welcome["paired"] is True
+    assert device_id in hub.store.devices()
+
+
+def test_live_pending_session_refreshes_activity_without_writing_every_frame(tmp_path, monkeypatch):
+    import asyncio
+    from hermes_gadget_plugin.store import DeviceStore, PENDING_TTL_S
+
+    now = [1000.0]
+    monkeypatch.setattr(hubmod.time, "time", lambda: now[0])
+    store = DeviceStore(tmp_path)
+    store.enroll("device", b"k" * 32)
+    writes = []
+    touch = store.touch
+    monkeypatch.setattr(store, "touch", lambda *a, **kw: (writes.append(now[0]), touch(*a, **kw))[-1])
+
+    class Socket:
+        async def send(self, _):
+            pass
+        def __aiter__(self):
+            return self.frames()
+        async def frames(self):
+            for _ in range(PENDING_TTL_S // 10 + 10):
+                now[0] += 10
+                yield '{"type":"pong"}'
+                assert store.key_for("device") is not None
+
+    class Unpaired(hubmod.HubDelegate):
+        async def is_paired(self, _):
+            return False
+    hub = hubmod.DeviceHub(store, Unpaired())
+    async def authenticated(_):
+        return {"device_id": "device"}
+    monkeypatch.setattr(hub, "_authenticate", authenticated)
+    asyncio.run(hub._handle(Socket()))
+    assert 0 < len(writes) < 100
+    assert store.key_for("device") is not None
+
+
 def test_approval_over_the_connection_confirms_the_record(devserver, loop_thread):
     hub, brain, url = devserver(require_pairing=True)
     device_id, welcome = _enroll(url, "soon approved")

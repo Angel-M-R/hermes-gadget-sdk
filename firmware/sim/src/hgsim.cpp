@@ -87,8 +87,7 @@ class SimHal final : public hg::Display,
   }
   bool set(std::string_view key, std::string_view value) override {
     if (!host_.storage_set) return false;
-    host_.storage_set(host_.user, std::string(key).c_str(), std::string(value).c_str());
-    return true;
+    return host_.storage_set(host_.user, std::string(key).c_str(), std::string(value).c_str()) != 0;
   }
   void erase(std::string_view key) override {
     if (host_.storage_erase) host_.storage_erase(host_.user, std::string(key).c_str());

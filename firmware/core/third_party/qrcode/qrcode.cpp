@@ -796,7 +796,11 @@ uint16_t qrcode_getBufferSize(uint8_t version) {
 // @TODO: Return error if data is too big.
 int8_t qrcode_initBytes(QRCode *qrcode, uint8_t *modules, uint8_t version, uint8_t ecc, uint8_t *data, uint16_t length) {
     // Adapted: the working buffers above are sized for QRCODE_MAX_VERSION.
-    if (version < 1 || version > QRCODE_MAX_VERSION) { return -1; }
+    if (version < 1 || version > QRCODE_MAX_VERSION || ecc > 3) { return -1; }
+#if LOCK_VERSION != 0
+    // Adapted: the caller's buffer and grid must match the locked tables.
+    if (version != LOCK_VERSION) { return -1; }
+#endif
     uint8_t size = version * 4 + 17;
     qrcode->version = version;
     qrcode->size = size;
@@ -878,7 +882,9 @@ int8_t qrcode_initBytes(QRCode *qrcode, uint8_t *modules, uint8_t version, uint8
 }
 
 int8_t qrcode_initText(QRCode *qrcode, uint8_t *modules, uint8_t version, uint8_t ecc, const char *data) {
-    return qrcode_initBytes(qrcode, modules, version, ecc, (uint8_t*)data, strlen(data));
+    const size_t length = strlen(data);
+    if (length > UINT16_MAX) { return -1; }
+    return qrcode_initBytes(qrcode, modules, version, ecc, (uint8_t*)data, (uint16_t)length);
 }
 
 bool qrcode_getModule(QRCode *qrcode, uint8_t x, uint8_t y) {

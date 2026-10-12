@@ -11,6 +11,8 @@
 #include "esp_timer.h"
 #include "freertos/task.h"
 #include "speaker_queue.hpp"
+#include "i2s_transfer.hpp"
+#include "port_pm.hpp"
 
 namespace hgp {
 namespace {
@@ -77,7 +79,11 @@ void I2sMic::task(void* arg) {
       continue;
     }
     size_t got = 0;
-    if (i2s_channel_read(self->rx_, raw, sizeof(raw), &got, pdMS_TO_TICKS(100)) != ESP_OK || got == 0) continue;
+    const auto err = i2s_channel_read(self->rx_, raw, sizeof(raw), &got, pdMS_TO_TICKS(100));
+    got = hg::received_bytes(err == ESP_OK ? hg::TransferStatus::Ok :
+                            err == ESP_ERR_TIMEOUT ? hg::TransferStatus::Timeout : hg::TransferStatus::Error, got);
+    if (!got) continue;
+    CpuWork cpu_work;
     size_t n = got / sizeof(int32_t);
     for (size_t i = 0; i < n; ++i) {
       // 24-bit sample left-aligned in 32 bits; keep the top 16 with a little gain.
@@ -176,9 +182,23 @@ void I2sSpeaker::task(void* arg) {
     }
     size_t n = got / sizeof(int16_t);
     int vol = self->volume_.load();
-    for (size_t i = 0; i < n; ++i) chunk[i] = static_cast<int16_t>(chunk[i] * vol / 100);
-    size_t written = 0;
-    i2s_channel_write(self->tx_, chunk, n * sizeof(int16_t), &written, pdMS_TO_TICKS(200));
+    {
+      CpuWork cpu_work;
+      for (size_t i = 0; i < n; ++i) chunk[i] = static_cast<int16_t>(chunk[i] * vol / 100);
+    }
+    struct Writer {
+      I2sSpeaker* speaker;
+      bool cancelled() { return speaker->flush_.load(); }
+      hg::TransferResult write(const uint8_t* data, size_t bytes) {
+        size_t written = 0;
+        const auto err = i2s_channel_write(speaker->tx_, data, bytes, &written, pdMS_TO_TICKS(200));
+        return {err == ESP_OK ? hg::TransferStatus::Ok : err == ESP_ERR_TIMEOUT ?
+                hg::TransferStatus::Timeout : hg::TransferStatus::Error, written};
+      }
+    } writer{self};
+    const size_t bytes = n * sizeof(int16_t);
+    if (hg::write_pcm(reinterpret_cast<const uint8_t*>(chunk), bytes, writer) != bytes && !self->flush_.load())
+      ESP_LOGW(TAG, "speaker write stalled");
   }
 }
 

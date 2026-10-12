@@ -15,6 +15,7 @@
 #include "esp_lcd_panel_io.h"
 #include "esp_log.h"
 #include "freertos/task.h"
+#include "scope_exit.hpp"
 
 namespace hgp {
 namespace {
@@ -88,6 +89,15 @@ void AmoledDisplay::command(uint8_t cmd, const uint8_t* data, size_t len) {
 }
 
 bool AmoledDisplay::begin(const AmoledConfig& cfg) {
+  bool bus_owned = false;
+  hg::ScopeExit cleanup([&] {
+    bands_.reset();
+    if (io_) { esp_lcd_panel_io_del(io_); io_ = nullptr; }
+    if (bus_owned) spi_bus_free(kHost);
+    if (done_) { vSemaphoreDelete(done_); done_ = nullptr; }
+    heap_caps_free(bounce_); bounce_ = nullptr;
+    heap_caps_free(fb_); fb_ = nullptr;
+  });
   cfg_ = cfg;
   const size_t px = static_cast<size_t>(cfg.width) * cfg.height;
   fb_ = static_cast<uint16_t*>(heap_caps_malloc(px * 2, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
@@ -98,6 +108,7 @@ bool AmoledDisplay::begin(const AmoledConfig& cfg) {
   }
   std::memset(fb_, 0, px * 2);
   done_ = xSemaphoreCreateBinary();
+  if (!done_) return false;
 
   spi_bus_config_t bus = {};
   bus.sclk_io_num = cfg.sclk;
@@ -112,6 +123,7 @@ bool AmoledDisplay::begin(const AmoledConfig& cfg) {
   bus.max_transfer_sz = cfg.width * kBounceRows * 2 + 16;
   bus.flags = SPICOMMON_BUSFLAG_QUAD;
   if (!esp_ok(spi_bus_initialize(kHost, &bus, SPI_DMA_CH_AUTO), TAG, "spi_bus_initialize")) return false;
+  bus_owned = true;
 
   esp_lcd_panel_io_spi_config_t io_cfg = {};
   io_cfg.cs_gpio_num = static_cast<gpio_num_t>(cfg.cs);
@@ -165,6 +177,7 @@ bool AmoledDisplay::begin(const AmoledConfig& cfg) {
       },
       [this](uint32_t ms) { return xSemaphoreTake(done_, pdMS_TO_TICKS(ms)) == pdTRUE; });
   ESP_LOGI(TAG, "CO5300 %ux%u ready", cfg.width, cfg.height);
+  cleanup.dismiss();
   return true;
 }
 

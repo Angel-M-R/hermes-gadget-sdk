@@ -79,7 +79,12 @@ void WsTransport::connect(const std::string& url, const std::string& subprotocol
 }
 
 void WsTransport::close() {
-  gens_.leave();  // anything still queued from the old connection is now stale
+  {
+    std::lock_guard<std::mutex> guard(rx_mutex_);
+    gens_.leave();  // old callbacks must finish before a new client can reuse rx_
+    rx_.clear();
+    rx_opcode_ = 0;
+  }
   if (!client_) return;
   // The send task closes and destroys the client after whatever it is sending:
   // on a dead link that can take seconds, and the app task must not wait.
@@ -122,6 +127,7 @@ void WsTransport::on_event(void* arg, const char*, int32_t id, void* event_data)
   auto* self = static_cast<WsTransport*>(arg);
   auto* d = static_cast<esp_websocket_event_data_t*>(event_data);
   const uint32_t gen = generation_of(d);
+  std::lock_guard<std::mutex> guard(self->rx_mutex_);
   if (!self->gens_.is_current(gen)) return;  // a client being torn down
   switch (id) {
     case WEBSOCKET_EVENT_CONNECTED:

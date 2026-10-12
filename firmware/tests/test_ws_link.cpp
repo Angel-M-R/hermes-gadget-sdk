@@ -88,6 +88,16 @@ TEST("ws: the old client's loss doesn't end the new connection") {
   CHECK(g.take_lost());
 }
 
+TEST("ws: delayed old loss cannot overwrite a current loss") {
+  Generations g;
+  g.leave();
+  const auto old = g.current();
+  g.leave();
+  g.lost(g.current());
+  g.lost(old);
+  CHECK(g.take_lost());
+}
+
 // --- The send queue ----------------------------------------------------------
 
 TEST("ws: messages leave the reserved slots free") {

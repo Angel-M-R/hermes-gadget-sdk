@@ -20,9 +20,12 @@ import json
 import os
 import struct
 import time
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional
+
+from .filelock import file_lock
 
 from . import protocol
 
@@ -202,45 +205,81 @@ class UpdateQueue:
         tmp.write_bytes(data)
         os.replace(tmp, path)
 
-    def stage(self, device_id: str, image: FirmwareImage) -> None:
-        self._write(self._path(device_id, ".bin"), image.data)
-        meta = {"version": image.version, "sha256": image.sha256, "size": image.size, "board": image.board,
-                "staged_at": time.time(), "attempts": 0}
-        self._write(self._path(device_id, ".json"), json.dumps(meta).encode())
-        self._path(device_id, ".status.json").unlink(missing_ok=True)
+    def _lock(self, device_id: str):
+        return file_lock(self._path(device_id, ".lock"))
+
+    def stage(self, device_id: str, image: FirmwareImage) -> str:
+        stage_id = uuid.uuid4().hex
+        with self._lock(device_id):
+            self._write(self._path(device_id, ".bin"), image.data)
+            meta = {"version": image.version, "sha256": image.sha256, "size": image.size, "board": image.board,
+                    "stage_id": stage_id, "staged_at": time.time(), "attempts": 0}
+            self._write(self._path(device_id, ".json"), json.dumps(meta).encode())
+            self._path(device_id, ".status.json").unlink(missing_ok=True)
+        return stage_id
 
     def pending(self) -> list[str]:
         if not self.dir.is_dir():
             return []
         return sorted(p.stem for p in self.dir.glob("*.bin") if protocol.DEVICE_ID_RE.match(p.stem))
 
-    def load(self, device_id: str) -> Optional[tuple[bytes, dict]]:
+    def _load(self, device_id: str) -> Optional[tuple[bytes, dict]]:
         try:
             data = self._path(device_id, ".bin").read_bytes()
             meta = json.loads(self._path(device_id, ".json").read_text(encoding="utf-8"))
         except (OSError, ValueError):
             return None
-        return data, meta if isinstance(meta, dict) else {}
+        return (data, meta) if isinstance(meta, dict) else None
 
-    def count_attempt(self, device_id: str) -> int:
-        staged = self.load(device_id)
-        if staged is None:
-            return 0
-        meta = staged[1]
-        meta["attempts"] = int(meta.get("attempts") or 0) + 1
-        self._write(self._path(device_id, ".json"), json.dumps(meta).encode())
-        return meta["attempts"]
+    def load(self, device_id: str) -> Optional[tuple[bytes, dict]]:
+        with self._lock(device_id):
+            return self._load(device_id)
 
-    def drop(self, device_id: str) -> None:
+    def count_attempt(self, device_id: str, expected_id: str | None = None) -> int:
+        with self._lock(device_id):
+            staged = self._load(device_id)
+            if staged is None or (expected_id is not None and staged[1].get("stage_id", "") != expected_id):
+                return 0
+            meta = staged[1]
+            meta["attempts"] = int(meta.get("attempts") or 0) + 1
+            self._write(self._path(device_id, ".json"), json.dumps(meta).encode())
+            return meta["attempts"]
+
+    def _drop(self, device_id: str) -> None:
         for suffix in (".bin", ".json"):
             self._path(device_id, suffix).unlink(missing_ok=True)
 
-    def report(self, device_id: str, **status) -> None:
+    def drop(self, device_id: str) -> None:
+        with self._lock(device_id):
+            self._drop(device_id)
+
+    def _report(self, device_id: str, **status) -> None:
         self._write(self._path(device_id, ".status.json"), json.dumps({**status, "at": time.time()}).encode())
 
+    def report(self, device_id: str, *, expected_id: str | None = None, **status) -> None:
+        with self._lock(device_id):
+            if expected_id is not None:
+                staged = self._load(device_id)
+                if staged is None or staged[1].get("stage_id", "") != expected_id:
+                    return
+                status["stage_id"] = expected_id
+            self._report(device_id, **status)
+
+    def complete(self, device_id: str, expected_id: str, *, drop: bool = True, **status) -> bool:
+        """Finish only this staged image; a replacement belongs to the next task."""
+        with self._lock(device_id):
+            staged = self._load(device_id)
+            if staged is None or staged[1].get("stage_id", "") != expected_id:
+                return False
+            if drop:
+                self._drop(device_id)
+            self._report(device_id, stage_id=expected_id, **status)
+            return True
+
     def status(self, device_id: str) -> Optional[dict]:
-        try:
-            status = json.loads(self._path(device_id, ".status.json").read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            return None
-        return status if isinstance(status, dict) else None
+        with self._lock(device_id):
+            try:
+                status = json.loads(self._path(device_id, ".status.json").read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                return None
+            return status if isinstance(status, dict) else None

@@ -2480,6 +2480,69 @@ TEST("Wi-Fi setup: the code is drawn inside the content band, dark on light") {
   }
   CHECK(black > 100);        // the modules
   CHECK(white > black / 2);  // the panel and quiet zone around them
+  int left = 466, top = 466, right = -1, bottom = -1;
+  for (int y = 0; y < 466; ++y) for (int x = 0; x < 466; ++x) {
+    if (r.fake.fb[static_cast<size_t>(y * 466 + x)] == 0xffff) {
+      left = std::min(left, x); top = std::min(top, y);
+      right = std::max(right, x); bottom = std::max(bottom, y);
+    }
+  }
+  const int cells = code->size + 8;
+  const int scale = (right - left + 1) / cells;
+  CHECK(scale >= 3);
+  CHECK_EQ(right - left + 1, cells * scale);
+  CHECK_EQ(bottom - top + 1, cells * scale);
+  if (scale < 3) return;
+  for (int cy = 0; cy < cells; ++cy) for (int cx = 0; cx < cells; ++cx) {
+    const bool dark = cx >= 4 && cy >= 4 && cx < cells - 4 && cy < cells - 4 && code->at(cx - 4, cy - 4);
+    for (int dy = 0; dy < scale; ++dy) for (int dx = 0; dx < scale; ++dx)
+      CHECK_EQ(r.fake.fb[static_cast<size_t>((top + cy * scale + dy) * 466 + left + cx * scale + dx)],
+               dark ? uint16_t(0) : uint16_t(0xffff));
+  }
+}
+
+TEST("QR content changes at the same size redraw the setup screen") {
+  FakeHal display;
+  display.make_round(466);
+  hg::Ui ui(display);
+  hg::qr::Code first = hg::qr::encode("first"), second = hg::qr::encode("other");
+  CHECK_EQ(first.size, second.size);
+  hg::UiModel model;
+  model.screen = hg::Screen::Setup;
+  model.qr = &first;
+  ui.render(model);
+  const auto before = display.fb;
+  model.qr = &second;
+  ui.render(model);
+  CHECK(before != display.fb);
+}
+
+TEST("Round USB indicator appears without a battery and clears again") {
+  FakeHal display;
+  display.make_round(466);
+  hg::Ui ui(display);
+  hg::UiModel model;
+  ui.render(model);
+  const auto before = display.fb;
+  model.usb_power = true;
+  ui.render(model);
+  CHECK(before != display.fb);
+  model.usb_power = false;
+  ui.render(model);
+  CHECK(before == display.fb);
+}
+
+TEST("Waking a dark display requests a network retry once") {
+  Rig r(Rig::touch_profile());
+  r.fake.backlight = true;
+  r.bring_online(true);
+  int retries = 0;
+  r.app.on_network_retry = [&] { ++retries; };
+  r.app.on_power_key();
+  CHECK(r.app.wake_display());
+  CHECK_EQ(retries, 1);
+  CHECK(!r.app.wake_display());
+  CHECK_EQ(retries, 1);
 }
 
 // The setup screen as the ESP32 port fills it, rendered with or without a code.

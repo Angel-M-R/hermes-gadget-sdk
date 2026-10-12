@@ -32,6 +32,14 @@ wheel=$(python3 -c 'import json; print(json.load(open("package.json"))["wheel"])
 releases=/opt/hermes-gadget/releases
 destination=$releases/$release_id
 health_timeout=${HERMES_GADGET_HEALTH_TIMEOUT:-30}
+case "$health_timeout" in
+    ''|*[!0-9]*) echo 'HERMES_GADGET_HEALTH_TIMEOUT must be a positive integer.' >&2; exit 1 ;;
+esac
+# Bound the value so shell arithmetic cannot overflow either.
+if [ "${#health_timeout}" -gt 4 ] || [ "$health_timeout" -eq 0 ]; then
+    echo 'HERMES_GADGET_HEALTH_TIMEOUT must be between 1 and 9999 seconds.' >&2
+    exit 1
+fi
 keep_releases=3
 install -d -m 755 "$releases"
 exec 9>/opt/hermes-gadget/install.lock
@@ -64,13 +72,13 @@ if [ ! -f "$destination/.installed" ]; then
         -r "$source_dir/requirements.txt"
     "$destination/venv/bin/python" -m pip install --no-deps --no-index "$source_dir/$wheel"
     HGSIM_LIBRARY="$destination/libhgsim.so" "$destination/venv/bin/python" -c \
-        'from hermes_gadget.sim.native import load_library; load_library()'
+        'import websockets; from hermes_gadget.sim.native import load_library; load_library()'
     touch "$destination/.installed"
     trap - EXIT
 fi
 cmp package.json "$destination/package.json"
 HGSIM_LIBRARY="$destination/libhgsim.so" "$destination/venv/bin/python" -c \
-    'from hermes_gadget.sim.native import load_library; load_library()'
+    'import websockets; from hermes_gadget.sim.native import load_library; load_library()'
 
 if ! getent passwd hermes-gadget >/dev/null; then
     useradd --system --user-group --home-dir /var/lib/hermes-gadget --shell /usr/sbin/nologin hermes-gadget
@@ -108,21 +116,29 @@ install -m 644 "$source_dir/hermes-gadget.service" /etc/systemd/system/hermes-ga
 install -m 755 "$source_dir/hermes-gadget-device" /usr/local/bin/hermes-gadget-device
 systemctl daemon-reload
 if [ "$was_active" = true ]; then
-    systemctl start hermes-gadget.service
+    restore_previous() {
+        if [ -n "$previous" ] && [ "$previous" != "$destination" ]; then
+            systemctl stop hermes-gadget.service || true
+            ln -sfn "$previous" /opt/hermes-gadget/current.new
+            mv -Tf /opt/hermes-gadget/current.new /opt/hermes-gadget/current
+            systemctl reset-failed hermes-gadget.service
+            systemctl restart hermes-gadget.service
+            echo "Went back to $(basename "$previous"). See: journalctl -u hermes-gadget -n 50" >&2
+        else
+            echo 'There is no previous release to go back to. See: journalctl -u hermes-gadget -n 50' >&2
+        fi
+        exit 1
+    }
+    if ! systemctl start hermes-gadget.service; then
+        echo "The service could not start on $release_id." >&2
+        restore_previous
+    fi
     # The new release must come up and answer on its control socket.
     waited=0
     until hermes-gadget-device status >/dev/null 2>&1; do
         if [ "$waited" -ge "$health_timeout" ]; then
             echo "The service did not answer within ${health_timeout}s on $release_id." >&2
-            if [ -n "$previous" ] && [ "$previous" != "$destination" ]; then
-                ln -sfn "$previous" /opt/hermes-gadget/current.new
-                mv -Tf /opt/hermes-gadget/current.new /opt/hermes-gadget/current
-                systemctl restart hermes-gadget.service
-                echo "Went back to $(basename "$previous"). See: journalctl -u hermes-gadget -n 50" >&2
-            else
-                echo 'There is no previous release to go back to. See: journalctl -u hermes-gadget -n 50' >&2
-            fi
-            exit 1
+            restore_previous
         fi
         sleep 1
         waited=$((waited + 1))

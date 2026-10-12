@@ -4,7 +4,9 @@
 
 ### Fork integration
 
-- Integrate upstream/main at `d0b317acda21eed50bc4fb2e6514ed632adba730`, retaining the fork's selectable faces, full AMOLED-1.8 layout, physical key controls, local mute, reading controls, large text and Spanish interface. Audio drivers, codec parameters and streaming pacing use the upstream implementation. The AMOLED-1.8 migration needs a new physical audio and power report.
+- Address PR #4 review findings: serialize device and OTA files across processes, keep active pending gadgets visible, restore Linux releases after start failures, harden QR/NVS bounds, preserve partial audio transfers, queue encoder edges and clean up failed display initialization. Simulator storage failures are propagated with ABI 7. Hardware behavior remains subject to physical validation.
+
+- Integrate upstream/main at `d0b317acda21eed50bc4fb2e6514ed632adba730`, retaining the fork's selectable faces, full AMOLED-1.8 layout, physical key controls, local mute, reading controls, large text and Spanish interface. Audio codec parameters and streaming pacing use the upstream implementation, with review fixes for partial I2S transfers, WebSocket receive serialization and retry timing. The AMOLED-1.8 migration needs a new physical audio and power report.
 - Gateway setup preserves Hermes's selected TTS provider and voice instead of forcing Ximena. Optional per-device provider overrides remain available and their additional Hermes hooks are checked at startup.
 - Keep the AXP2101 power-key latch protection: an I2C clear failure must not report the same short press repeatedly.
 

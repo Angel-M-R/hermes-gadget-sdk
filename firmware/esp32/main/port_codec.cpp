@@ -2,6 +2,7 @@
 // speaker amplifier and an ES7210 ADC for the microphones, on one duplex I2S
 // bus (esp_codec_dev does the codec register work).
 #include "port.hpp"  // first: pulls in FreeRTOS.h ahead of task.h/queue.h
+#include "port_pm.hpp"
 
 #include <cstring>
 
@@ -117,7 +118,7 @@ bool CodecAudio::begin(const CodecAudioConfig& cfg, i2c_master_bus_handle_t bus)
   out_cfg.data_if = data_if;
   out_ = out_cfg.codec_if ? esp_codec_dev_new(&out_cfg) : nullptr;
 
-  if (!shared) {
+  if (!shared && cfg.mic == MicCodec::Es7210) {
     audio_codec_i2c_cfg_t adc_i2c = {};
     adc_i2c.port = I2C_NUM_0;
     adc_i2c.addr = ES7210_CODEC_DEFAULT_ADDR;
@@ -161,9 +162,19 @@ bool CodecMic::begin(esp_codec_dev_handle_t dev, bool rmnm, const CodecAudio::Mi
   rmnm_ = rmnm;
   if (rmnm) {
     raw_ = static_cast<int16_t*>(heap_caps_malloc(kMicChunk * 4 * sizeof(int16_t), MALLOC_CAP_8BIT));
-    if (!raw_) return false;
+    if (!raw_) {
+      if (link_.switchable) esp_codec_dev_close(dev_);
+      dev_ = nullptr;
+      return false;
+    }
   }
-  xTaskCreate(&CodecMic::task, "hg-mic", 4096, this, 6, &task_);
+  if (xTaskCreate(&CodecMic::task, "hg-mic", 4096, this, 6, &task_) != pdPASS) {
+    if (link_.switchable) esp_codec_dev_close(dev_);
+    heap_caps_free(raw_); raw_ = nullptr;
+    dev_ = nullptr;
+    task_ = nullptr;
+    return false;
+  }
   return true;
 }
 
@@ -206,10 +217,14 @@ void CodecMic::task(void* arg) {
       void* data = mic->rmnm_ ? static_cast<void*>(mic->raw_) : static_cast<void*>(chunk);
       const size_t bytes = mic->rmnm_ ? kMicChunk * 4 * sizeof(int16_t) : kMicChunk * sizeof(int16_t);
       if (esp_codec_dev_read(mic->dev_, data, bytes) != ESP_CODEC_DEV_OK) return false;
+      CpuWork cpu_work;
       if (mic->rmnm_) hg::ws185_mono(mic->raw_, chunk, kMicChunk);
       return true;
     }
-    void deliver(const int16_t* chunk) { events::post(EventType::Mic, chunk, kMicChunk * sizeof(int16_t)); }
+    void deliver(const int16_t* chunk) {
+      CpuWork cpu_work;
+      if (mic->capturing_.load()) events::post(EventType::Mic, chunk, kMicChunk * sizeof(int16_t));
+    }
     void wait() { ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(1000)); }
     void pause() { vTaskDelay(pdMS_TO_TICKS(10)); }
   } ops{self};
@@ -323,7 +338,10 @@ void CodecSpeaker::task(void* arg) {
     if (pa && !pa->enable(generation)) continue;
     if (self->stereo32_) {
       const size_t frames = got / sizeof(int16_t);
-      hg::ws185_stereo32(chunk, stereo, frames);
+      {
+        CpuWork cpu_work;
+        hg::ws185_stereo32(chunk, stereo, frames);
+      }
       esp_codec_dev_write(self->dev_, stereo, static_cast<int>(frames * 2 * sizeof(int32_t)));
     } else {
       esp_codec_dev_write(self->dev_, chunk, static_cast<int>(got & ~static_cast<size_t>(1)));

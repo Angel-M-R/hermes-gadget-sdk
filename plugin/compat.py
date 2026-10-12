@@ -35,8 +35,6 @@ IMPORTS: dict[str, tuple[str, ...]] = {
     "plugins.plugin_storage": ("plugin_data_dir",),
     "tools.slash_confirm": ("get_pending", "resolve"),
     "tools.approval": ("resolve_gateway_approval",),
-    "hermes_cli.config": ("load_config", "set_config_value"),
-    "hermes_cli.setup": ("print_header", "print_info", "print_success", "print_warning", "prompt"),
 }
 
 # Private members of BasePlatformAdapter the adapter overrides or calls.
@@ -77,9 +75,11 @@ def missing(resolve: Callable[[str], object] = importlib.import_module) -> list[
     return gaps
 
 
-def check(resolve: Callable[[str], object] = importlib.import_module) -> None:
+def check(resolve: Callable[[str], object] = importlib.import_module, *, adapter=None) -> None:
     """Raise with a clear message when this Hermes lacks something the plugin needs."""
     gaps = missing(resolve)
+    if adapter is not None and not isinstance(getattr(adapter, "_auto_tts_disabled_chats", None), set):
+        gaps.append("BasePlatformAdapter._auto_tts_disabled_chats")
     if gaps:
         raise RuntimeError(
             "This Hermes Agent lacks what the Hermes Gadget plugin relies on: " + ", ".join(gaps)

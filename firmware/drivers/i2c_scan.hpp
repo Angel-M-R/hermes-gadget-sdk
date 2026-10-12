@@ -27,8 +27,9 @@ constexpr uint16_t kEnd = 0x78;  // 0x78 and up are reserved
 // Ops supplies:
 //   Probe probe(uint16_t addr)   one try at an address
 //   void  pause()                between tries, so another transfer can finish
+//   uint32_t now_ms()           monotonic clock for the request budget
 template <class Ops>
-std::vector<std::string> scan(Ops& ops) {
+std::vector<std::string> scan(Ops& ops, uint32_t budget_ms = 2000) {
   std::vector<std::string> out;
   std::vector<uint16_t> timeouts;  // the current run of addresses that timed out
   char buf[24];
@@ -39,10 +40,20 @@ std::vector<std::string> scan(Ops& ops) {
     }
     timeouts.clear();
   };
+  const uint32_t started = ops.now_ms();
+  auto exhausted = [&] {
+    if (ops.now_ms() - started < budget_ms) return false;
+    flush();
+    out.push_back("scan budget exhausted");
+    return true;
+  };
   for (uint16_t addr = kFirst; addr < kEnd; ++addr) {
+    if (exhausted()) return out;
     Probe p = ops.probe(addr);
     for (int i = 1; i < kTries && p == Probe::Timeout; ++i) {
+      if (exhausted()) return out;
       ops.pause();
+      if (exhausted()) return out;
       p = ops.probe(addr);
     }
     if (p == Probe::Timeout) {

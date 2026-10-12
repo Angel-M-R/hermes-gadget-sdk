@@ -130,6 +130,7 @@ hg::json::Value i2c_scan() {
       return err == ESP_ERR_TIMEOUT ? hg::i2c_scan::Probe::Timeout : hg::i2c_scan::Probe::Nack;
     }
     void pause() { vTaskDelay(pdMS_TO_TICKS(20)); }
+    uint32_t now_ms() { return static_cast<uint32_t>(esp_timer_get_time() / 1000); }
   } ops{g_parts.i2c};
   for (const std::string& entry : hg::i2c_scan::scan(ops)) found.push(entry);
   return found;

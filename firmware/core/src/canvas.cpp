@@ -148,7 +148,8 @@ std::vector<std::string> wrap_text(std::string_view text, int max_chars) {
       std::string_view word = para.substr(p, end - p);
       p = end;
       if (word.empty()) continue;
-      while (static_cast<int>(text_length(word)) > max_chars) {
+      size_t word_chars = text_length(word);
+      while (word_chars > static_cast<size_t>(max_chars)) {
         if (!line.empty()) {
           lines.push_back(line);
           line.clear();
@@ -156,9 +157,10 @@ std::vector<std::string> wrap_text(std::string_view text, int max_chars) {
         const auto part = text_prefix(word, static_cast<size_t>(max_chars));
         lines.emplace_back(part);
         word.remove_prefix(part.size());
+        word_chars -= static_cast<size_t>(max_chars);
       }
       if (word.empty()) continue;
-      size_t needed = line.empty() ? text_length(word) : text_length(line) + 1 + text_length(word);
+      size_t needed = line.empty() ? word_chars : text_length(line) + 1 + word_chars;
       if (static_cast<int>(needed) > max_chars) {
         lines.push_back(line);
         line.assign(word);

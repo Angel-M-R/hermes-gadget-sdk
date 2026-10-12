@@ -161,6 +161,21 @@ def test_the_queue_hands_staged_images_to_the_gateway(tmp_path):
         queue.stage("../evil", image)
 
 
+def test_a_finished_update_cannot_complete_or_drop_its_replacement(tmp_path):
+    gateway, cli = ota.UpdateQueue(tmp_path), ota.UpdateQueue(tmp_path)
+    image = ota.inspect_image(fake_image())
+    old = cli.stage(DEVICE_ID, image)
+    new = cli.stage(DEVICE_ID, image)
+    assert old != new
+    assert not gateway.complete(DEVICE_ID, old, state="done", version=image.version)
+    gateway.report(DEVICE_ID, expected_id=old, state="sending", sent=10)
+    assert cli.status(DEVICE_ID) is None
+    assert cli.load(DEVICE_ID)[1]["stage_id"] == new
+    assert gateway.complete(DEVICE_ID, new, state="done", version=image.version)
+    assert cli.load(DEVICE_ID) is None
+    assert cli.status(DEVICE_ID)["stage_id"] == new
+
+
 @pytest.fixture
 def cli_store(tmp_path, monkeypatch):
     from hermes_gadget_plugin import cli
@@ -185,7 +200,14 @@ def test_hermes_gadget_update_stages_and_waits_for_the_gateway(cli_store, monkey
     assert "Staged firmware 0.2.0" in capsys.readouterr().out
 
     reports = iter([dict(state="sending", sent=50, size=100), dict(state="done", version="0.2.0")])
-    monkeypatch.setattr(cli.time, "sleep", lambda s: queue.report(DEVICE_ID, **next(reports)))
+    def gateway_report(_):
+        stage_id = queue.load(DEVICE_ID)[1]["stage_id"]
+        status = next(reports)
+        if status["state"] == "done":
+            queue.complete(DEVICE_ID, stage_id, **status)
+        else:
+            queue.report(DEVICE_ID, expected_id=stage_id, **status)
+    monkeypatch.setattr(cli.time, "sleep", gateway_report)
     cli._cmd_update(types.SimpleNamespace(latest=False, force=False, device=DEVICE_ID, image=str(firmware), no_wait=False, timeout=30))
     out = capsys.readouterr().out
     assert "sending: 50%" in out and "Installed 0.2.0. Desk restarts into it" in out

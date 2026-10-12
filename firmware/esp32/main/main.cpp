@@ -1,6 +1,7 @@
 // Hermes Gadget firmware entry point: wires the ESP32 drivers to the portable
 // core (hg::App) and runs the app loop on the main task.
 #include "port.hpp"  // first: pulls in FreeRTOS.h ahead of task.h/queue.h
+#include "port_pm.hpp"
 
 #include <cstring>
 
@@ -206,7 +207,7 @@ extern "C" void app_main(void) {
     } else if (g_display.begin(board.lcd, i2c_bus)) {
       hal.display = &g_display;
     }
-  } else if (board.amoled.enabled && g_amoled.begin(board.amoled)) {
+  } else if (peripherals_ready && board.amoled.enabled && g_amoled.begin(board.amoled)) {
     hal.display = &g_amoled;
   }
   if (board.mic.enabled && g_mic.begin(board.mic)) hal.mic = &g_mic;
@@ -276,6 +277,7 @@ extern "C" void app_main(void) {
   app.on_wifi_setup = [] { return g_wifi.start_setup(); };
   app.on_wifi_setup_close = [] { g_wifi.stop_setup(); };
   app.on_wifi_setup_ap = [] { return g_wifi.setup_ap(); };
+  app.on_network_retry = [] { g_wifi.retry_now(); };
   app.on_diag = [](hg::json::Value& report) {
     hgp::diag::report(report);
     report.set("ota", g_updater.describe());
@@ -287,7 +289,9 @@ extern "C" void app_main(void) {
   for (;;) {
     hgp::Event ev;
     // Block briefly for events, then run the core's timers and animations.
-    if (hgp::events::receive(ev, pdMS_TO_TICKS(10))) {
+    const bool received = hgp::events::receive(ev, pdMS_TO_TICKS(10));
+    hgp::CpuWork cpu_work;
+    if (received) {
       do {
         dispatch(app, ev);
         hgp::events::release(ev);

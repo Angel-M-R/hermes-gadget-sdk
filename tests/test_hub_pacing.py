@@ -87,3 +87,4 @@ def test_a_reply_never_bursts_past_the_lead(monkeypatch, stall_s):
         for i, (t, _) in enumerate(run_frames):
             due = t0 + i * hubmod.AUDIO_FRAME_MS / 1000
             assert t >= due - hubmod.PLAYBACK_LEAD_S - 1e-6, f"frame {i} sent {due - t:.3f}s early"
+            assert t <= due + 1e-6, f"frame {i} sent {t - due:.3f}s late"

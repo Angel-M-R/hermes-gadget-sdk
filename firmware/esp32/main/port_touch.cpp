@@ -1,5 +1,6 @@
 // Touch controllers, a key mirrored on a TCA9554 or PCF8574 expander and a
-// rotary encoder, polled from their own task. Samples become Touch, Key and
+// rotary encoder. Touch and key polling run on their own task; encoder GPIO
+// edges are captured by an ISR. Samples become Touch, Key and
 // Encoder events; the app task turns them into gestures (hg::TouchGestures)
 // and button presses.
 #include "port.hpp"  // first: pulls in FreeRTOS.h ahead of task.h/queue.h
@@ -90,17 +91,39 @@ bool TouchInput::begin(const TouchConfig& touch, const ExpanderKeyConfig& key, c
     pins.pin_bit_mask = (1ULL << encoder.a) | (1ULL << encoder.b);
     pins.mode = GPIO_MODE_INPUT;
     pins.pull_up_en = GPIO_PULLUP_ENABLE;
-    if (gpio_config(&pins) == ESP_OK) {
+    const auto service = gpio_install_isr_service(0);
+    if ((service == ESP_OK || service == ESP_ERR_INVALID_STATE) && gpio_config(&pins) == ESP_OK) {
       encoder_a_ = static_cast<gpio_num_t>(encoder.a);
       encoder_b_ = static_cast<gpio_num_t>(encoder.b);
-      encoder_state_ = static_cast<uint8_t>((gpio_get_level(encoder_a_) << 1) | gpio_get_level(encoder_b_));
+      encoder_.reset(static_cast<uint8_t>((gpio_get_level(encoder_a_) << 1) | gpio_get_level(encoder_b_)));
+      encoder_edges_ = xQueueCreate(256, sizeof(uint8_t));
+      if (!encoder_edges_ || gpio_isr_handler_add(encoder_a_, encoder_edge, this) != ESP_OK ||
+          gpio_isr_handler_add(encoder_b_, encoder_edge, this) != ESP_OK) {
+        gpio_isr_handler_remove(encoder_a_);
+        gpio_isr_handler_remove(encoder_b_);
+        if (encoder_edges_) vQueueDelete(encoder_edges_);
+        encoder_edges_ = nullptr;
+        encoder_a_ = encoder_b_ = GPIO_NUM_NC;
+      }
     }
   }
   const bool has_encoder = encoder_a_ != GPIO_NUM_NC;
   if (!has_touch() && !key_dev_ && !has_encoder) return false;
   if (xTaskCreate(&TouchInput::task, "hg-touch", 3072, this, 5, nullptr) != pdPASS) {
+    if (has_encoder) {
+      gpio_isr_handler_remove(encoder_a_);
+      gpio_isr_handler_remove(encoder_b_);
+      vQueueDelete(encoder_edges_); encoder_edges_ = nullptr;
+      encoder_a_ = encoder_b_ = GPIO_NUM_NC;
+    }
     ESP_LOGE(TAG, "could not start the touch task");
     return false;
+  }
+  if (has_encoder) {
+    gpio_set_intr_type(encoder_a_, GPIO_INTR_ANYEDGE);
+    gpio_set_intr_type(encoder_b_, GPIO_INTR_ANYEDGE);
+    gpio_intr_enable(encoder_a_);
+    gpio_intr_enable(encoder_b_);
   }
   ESP_LOGI(TAG, "touch %s, key %s, encoder %s", has_touch() ? "ready" : "off", key_dev_ ? "ready" : "off",
            has_encoder ? "ready" : "off");
@@ -179,18 +202,22 @@ bool TouchInput::read_key(bool& pressed) {
   return true;
 }
 
-// A quadrature step table: four steps make one detent.
+// The ISR only snapshots GPIOs into a bounded queue. I2C touch/key waits must
+// not hide transitions; decoding and app events stay on the input task.
+void TouchInput::encoder_edge(void* arg) {
+  auto* self = static_cast<TouchInput*>(arg);
+  const uint8_t state = static_cast<uint8_t>((gpio_get_level(self->encoder_a_) << 1) | gpio_get_level(self->encoder_b_));
+  BaseType_t woken = pdFALSE;
+  if (xQueueSendFromISR(self->encoder_edges_, &state, &woken) != pdTRUE) self->encoder_overflow_.store(true);
+  if (woken) portYIELD_FROM_ISR();
+}
+
 bool TouchInput::sample_encoder(int& direction) {
   direction = 0;
-  if (encoder_a_ == GPIO_NUM_NC) return false;
-  static constexpr int8_t kStep[16] = {0, -1, 1, 0, 1, 0, 0, -1, -1, 0, 0, 1, 0, 1, -1, 0};
-  const uint8_t state = static_cast<uint8_t>((gpio_get_level(encoder_a_) << 1) | gpio_get_level(encoder_b_));
-  encoder_accumulator_ = static_cast<int8_t>(encoder_accumulator_ + kStep[(encoder_state_ << 2) | state]);
-  encoder_state_ = state;
-  if (encoder_accumulator_ >= 4 || encoder_accumulator_ <= -4) {
-    direction = encoder_accumulator_ > 0 ? 1 : -1;
-    encoder_accumulator_ = 0;
-  }
+  if (!encoder_edges_) return false;
+  uint8_t state = 0;
+  if (xQueueReceive(encoder_edges_, &state, 0) != pdTRUE) return false;
+  direction = encoder_.sample(state);
   return true;
 }
 
@@ -228,9 +255,16 @@ void TouchInput::task(void* arg) {
       events::post(EventType::Key, &k, sizeof(k));
     }
     int direction = 0;
-    if (self->sample_encoder(direction) && direction) {
-      EncoderSample e{static_cast<int8_t>(direction)};
-      events::post(EventType::Encoder, &e, sizeof(e));
+    if (self->encoder_overflow_.exchange(false)) {
+      xQueueReset(self->encoder_edges_);
+      self->encoder_.reset(static_cast<uint8_t>((gpio_get_level(self->encoder_a_) << 1) | gpio_get_level(self->encoder_b_)));
+      ESP_LOGW(TAG, "encoder queue overflow; discarded incomplete detents");
+    }
+    while (self->sample_encoder(direction)) {
+      if (direction) {
+        EncoderSample e{static_cast<int8_t>(direction)};
+        events::post(EventType::Encoder, &e, sizeof(e));
+      }
     }
     vTaskDelay(pdMS_TO_TICKS(kPollMs));
   }

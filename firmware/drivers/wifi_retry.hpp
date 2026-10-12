@@ -44,10 +44,9 @@ class WifiRetry {
     retry_at_ = now ? now : 1;
   }
   // True when the caller should start an attempt now; the attempt holds the chip awake.
-  bool due(uint32_t now) {
+  bool due(uint32_t now, bool on_battery = false) {
     if (attempting_ && static_cast<int32_t>(now - attempt_at_) >= static_cast<int32_t>(kAttemptTimeoutMs)) {
-      attempting_ = false;  // gave no answer: count it as a failure, start over
-      retry_at_ = now ? now : 1;
+      lost(now, on_battery);
     }
     if (attempting_ || !retry_at_ || static_cast<int32_t>(now - retry_at_) < 0) return false;
     attempting_ = true;
@@ -59,6 +58,7 @@ class WifiRetry {
   void start_failed(uint32_t now) {
     attempting_ = false;
     retry_at_ = now + kDelaysMs[0];
+    if (!retry_at_) retry_at_ = 1;
   }
   bool attempting() const { return attempting_; }
   uint32_t retry_at() const { return retry_at_; }

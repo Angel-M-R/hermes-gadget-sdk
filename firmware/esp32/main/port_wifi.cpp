@@ -133,7 +133,11 @@ void Wifi::tick(hg::App& app, uint32_t now) {
   }
   if (http_ && (static_cast<int32_t>(now - setup_until_) >= 0 ||
                 (close_at_ && static_cast<int32_t>(now - close_at_) >= 0))) app.close_wifi_setup();
-  if (configured_ && retry_.due(now) && esp_wifi_connect() != ESP_OK) retry_.start_failed(now);
+  if (!power_checked_at_ || now - power_checked_at_ >= 1000) {
+    battery_ = on_battery && on_battery();
+    power_checked_at_ = now ? now : 1;
+  }
+  if (configured_ && retry_.due(now, battery_) && esp_wifi_connect() != ESP_OK) retry_.start_failed(now);
   hold_while_attempting();
 }
 

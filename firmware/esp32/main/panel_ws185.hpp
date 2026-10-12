@@ -373,8 +373,8 @@ static const st77916_lcd_init_cmd_t kWs185PanelNew[] = {
     {0xD9, "\xaa", 1, 0},
     {0xF3, "\x01", 1, 0},
     {0xF0, "\x00", 1, 0},
-    {0x21, "\x00", 1, 0},
-    {0x11, "\x00", 1, 120},
-    {0x29, "\x00", 1, 0},
+    {0x21, nullptr, 0, 0},
+    {0x11, nullptr, 0, 120},
+    {0x29, nullptr, 0, 0},
 };
 }  // namespace hgp

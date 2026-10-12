@@ -36,7 +36,7 @@ jobs:
         run: |
           sha=$(git rev-parse HEAD)
           for workflow in ci.yml hermes.yml; do
-            if gh run list --repo "$GITHUB_REPOSITORY" --workflow "$workflow" --commit "$sha" --status success --limit 1 --json databaseId -q '.[0].databaseId' | grep -q .; then
+            if gh run list --repo "$GITHUB_REPOSITORY" --workflow "$workflow" --branch main --commit "$sha" --status success --limit 1 --json databaseId -q '.[0].databaseId' | grep -q .; then
               echo "$workflow succeeded on $sha"
             else
               echo "::error::$workflow has no successful run on $sha. Merge, wait for green CI on main, then tag that commit."

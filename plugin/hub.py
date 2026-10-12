@@ -564,11 +564,12 @@ class DeviceHub:
             # Anyone who reaches the port can enroll; pairing is what admits them. Until
             # then a device is pending, and only so many may wait at once.
             address = self._address(ws)
-            pending = self.store.pending()
-            if len(pending) >= MAX_PENDING_DEVICES:
+            allowed = bool(await self.delegate.is_paired(DeviceSession(self, ws, hello)))
+            pending = self.store.pending() if not allowed else {}
+            if not allowed and len(pending) >= MAX_PENDING_DEVICES:
                 raise Rejected("busy", f"{len(pending)} devices are already waiting to be paired; approve or "
                                        "forget some first (hermes gadget devices)")
-            if sum(1 for rec in pending.values() if rec.get("address") == address) >= MAX_PENDING_PER_ADDRESS:
+            if not allowed and sum(1 for rec in pending.values() if rec.get("address") == address) >= MAX_PENDING_PER_ADDRESS:
                 raise Rejected("busy", f"{address} already has {MAX_PENDING_PER_ADDRESS} devices waiting to be paired")
             self.store.enroll(device_id, key, name=str(hello.get("name") or ""), board=str(hello.get("board") or ""),
                               address=address)
@@ -604,8 +605,14 @@ class DeviceHub:
             await self.delegate.on_ready(session)
             heartbeat = asyncio.create_task(self._heartbeat(session))
 
+            last_saved = time.time()
+
             async for raw in ws:
                 session.last_rx = time.monotonic()
+                now = time.time()
+                if now - last_saved >= 60:
+                    self.store.touch(session.device_id)
+                    last_saved = now
                 if isinstance(raw, bytes):
                     self._on_binary(session, raw)
                 else:

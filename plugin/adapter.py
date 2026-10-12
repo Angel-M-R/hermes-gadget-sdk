@@ -55,7 +55,7 @@ from gateway.platforms.base import (
 from gateway.platforms.event import MessageEvent, MessageType
 
 from . import audio as gaudio
-from . import imaging, ota, runtime, textfmt
+from . import compat, imaging, ota, runtime, textfmt
 from .hub import DeviceHub, DeviceSession, HubDelegate
 from .store import DeviceStore
 
@@ -147,6 +147,7 @@ class GadgetAdapter(BasePlatformAdapter, HubDelegate):
 
     def __init__(self, config: PlatformConfig):
         super().__init__(config=config, platform=Platform(PLATFORM_NAME))
+        compat.check(adapter=self)
         extra = config.extra or {}
         self._host = str(extra.get("host") or "0.0.0.0")
         port = extra.get("port")
@@ -312,29 +313,27 @@ class GadgetAdapter(BasePlatformAdapter, HubDelegate):
         staged = queue.load(session.device_id)
         if staged is None:
             return
-        data, _meta = staged
+        data, meta = staged
+        stage_id = str(meta.get("stage_id", ""))
         reported = 0.0
 
         def progress(sent: int, total: int) -> None:
             nonlocal reported
             if sent == total or time.monotonic() - reported >= 1.0:
                 reported = time.monotonic()
-                queue.report(session.device_id, state="sending", sent=sent, size=total)
+                queue.report(session.device_id, expected_id=stage_id, state="sending", sent=sent, size=total)
 
         logger.info("[%s] installing staged firmware on %s", self.name, session.device_id)
         try:
             version = await session.update_firmware(data, progress=progress)
         except ota.UpdateError as exc:
             # A device that dropped off gets the image again when it's back, a few times.
-            retry = exc.code in ota.RETRY_CODES and queue.count_attempt(session.device_id) < ota.MAX_ATTEMPTS
-            # Drop before the final report: whoever reads "failed" or "done" finds nothing staged.
-            if not retry:
-                queue.drop(session.device_id)
-            queue.report(session.device_id, state="retrying" if retry else "failed", code=exc.code, error=exc.message)
+            retry = exc.code in ota.RETRY_CODES and queue.count_attempt(session.device_id, stage_id) < ota.MAX_ATTEMPTS
+            queue.complete(session.device_id, stage_id, drop=not retry,
+                           state="retrying" if retry else "failed", code=exc.code, error=exc.message)
             logger.warning("[%s] firmware update for %s failed: %s", self.name, session.device_id, exc.message)
             return
-        queue.drop(session.device_id)
-        queue.report(session.device_id, state="done", version=version)
+        queue.complete(session.device_id, stage_id, state="done", version=version)
         logger.info("[%s] %s installed firmware %s", self.name, session.device_id, version)
 
     async def _claim_home(self, session: DeviceSession) -> None:

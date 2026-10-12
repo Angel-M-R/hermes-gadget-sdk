@@ -60,3 +60,12 @@ TEST("TagScanner: a value that never ends is cut at the limit") {
   CHECK_EQ(feed_in_chunks(scanner, image, 4), 1);
   CHECK_EQ(scanner.value(), std::string("abcdefgh"));
 }
+
+TEST("TagScanner: overlapping prefixes survive across chunks") {
+  const auto image = bytes(std::string("aaab=value\0", 11));
+  for (size_t chunk : {1u, 2u, 11u}) {
+    hg::TagScanner scanner("aab");
+    CHECK_EQ(feed_in_chunks(scanner, image, chunk), 1);
+    CHECK_EQ(scanner.value(), std::string("=value"));
+  }
+}

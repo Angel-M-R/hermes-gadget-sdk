@@ -143,6 +143,15 @@ def test_pair_approves_the_device_showing_a_code(monkeypatch, capsys):
     assert "Approved Desk. It shows Ready" in capsys.readouterr().out
 
 
+def test_pair_rejects_an_ambiguous_name_before_asking(monkeypatch):
+    devices = FakeDevices({DESK: {"name": "Desk"}, KITCHEN: {"name": "Desk"}},
+                          {DESK: "ABCD2345", KITCHEN: "EFGH6789"})
+    approvals = FakeApprovals({"ABCD2345": DESK, "EFGH6789": KITCHEN})
+    with pytest.raises(SystemExit, match="matches several"):
+        _pair(monkeypatch, devices, approvals, device="Desk")
+    assert not approvals.approved
+
+
 def test_pair_leaves_declined_and_already_approved_devices_alone(monkeypatch, capsys):
     devices = FakeDevices({DESK: {"name": "Desk"}, KITCHEN: {"name": "Kitchen"}},
                           {DESK: "ABCD2345", KITCHEN: "EFGH6789"})

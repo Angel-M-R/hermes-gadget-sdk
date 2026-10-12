@@ -12,6 +12,7 @@
 // examples/factory at ec889e789b3cf093412689a143f7f37b42b56af7 (MIT).
 // Copyright (c) 2022 Xinyuan-LilyGO. See LICENSES/LilyGO-MIT.txt and NOTICE.
 #include "port.hpp"  // first: pulls in FreeRTOS.h ahead of task.h/queue.h
+#include "scope_exit.hpp"
 
 #include <algorithm>
 #include <cstring>
@@ -86,6 +87,15 @@ bool ParallelDisplay::on_trans_done(esp_lcd_panel_io_handle_t, esp_lcd_panel_io_
 }
 
 bool ParallelDisplay::begin(const LcdConfig& cfg, int power_pin) {
+  hg::ScopeExit cleanup([&] {
+    bands_.reset();
+    if (panel_) { esp_lcd_panel_del(panel_); panel_ = nullptr; }
+    if (io_) { esp_lcd_panel_io_del(io_); io_ = nullptr; }
+    if (i80_) { esp_lcd_del_i80_bus(i80_); i80_ = nullptr; }
+    if (done_) { vSemaphoreDelete(done_); done_ = nullptr; }
+    heap_caps_free(bounce_); bounce_ = nullptr;
+    heap_caps_free(fb_); fb_ = nullptr;
+  });
   cfg_ = cfg;
   if (!power_panel(power_pin)) {
     ESP_LOGE(TAG, "could not raise the panel power pin (GPIO %d)", power_pin);
@@ -102,6 +112,7 @@ bool ParallelDisplay::begin(const LcdConfig& cfg, int power_pin) {
   }
   std::memset(fb_, 0, px * 2);
   done_ = xSemaphoreCreateBinary();
+  if (!done_) return false;
 
   // GPIO9 is the panel's active-low RD input; park it high before bus setup.
   gpio_reset_pin(GPIO_NUM_9);
@@ -182,6 +193,7 @@ bool ParallelDisplay::begin(const LcdConfig& cfg, int power_pin) {
       [this](uint32_t ms) { return xSemaphoreTake(done_, pdMS_TO_TICKS(ms)) == pdTRUE; });
   if (cfg.backlight >= 0) set_backlight(100);
   ESP_LOGI(TAG, "ST7789 %ux%u ready on the i80 bus (gap %d,%d)", cfg.width, cfg.height, cfg.gap_x, cfg.gap_y);
+  cleanup.dismiss();
   return true;
 }
 

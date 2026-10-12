@@ -31,7 +31,7 @@ The Python jobs in `.github/workflows/ci.yml` run under `xvfb-run` so the deskto
 
 CI runs the adapter and gateway suites in `.github/workflows/hermes.yml`: against the Hermes commit pinned there (`HERMES_REF`) on every push and pull request, and against Hermes `main` once a day. To move the pin, run that workflow by hand with `hermes_ref: main`. When it passes, put the commit it printed into `HERMES_REF` and into `TESTED_HERMES_COMMIT` in `plugin/compat.py`; a test checks that the two agree.
 
-The Raspberry Pi package installs its runtime dependencies from `linux/requirements.txt`, a lock with hashes compiled from `linux/requirements.in` (the `[audio,gpio]` extras). Change the extras in `pyproject.toml` and `requirements.in` together, then regenerate the lock as the file's header says; Dependabot proposes updates to it weekly.
+The Raspberry Pi package installs its runtime dependencies from `linux/requirements.txt`, a lock with hashes compiled from `linux/requirements.in` (the WebSocket client and `[audio,gpio]` extras). Change the extras in `pyproject.toml` and `requirements.in` together, then regenerate the lock as the file's header says; Dependabot proposes updates to it weekly.
 
 The Linux jobs run on `ubuntu-24.04` rather than `ubuntu-latest`, so a new runner image arrives as a deliberate change instead of a surprise. Every action is pinned to a commit, with the release tag in a comment, and PlatformIO to a version, so a job runs the same code until a change says otherwise. Every job has a timeout. Dependabot proposes the workflows' actions (updating the pinned commits), the installer's npm packages and the Python dependencies weekly, a week after each release.
 
@@ -125,3 +125,5 @@ Conventions:
 - **No exceptions, no RTTI.** Prefer `std::string`, `std::vector` and `std::function`; avoid per-frame heap churn in hot paths (mic, audio, rendering).
 - **The UI is deterministic.** Anything time-based goes through `UiModel::frame`, which the app advances.
 - **New protocol messages** are additive. Update [protocol.md](protocol.md), the route table in `app.cpp`, the hub's `_routes`, and tests on both sides.
+
+Firmware review checks also build the QR encoder with `LOCK_VERSION=3` in the host test suite. Power-managed boards hold a CPU-frequency lock around app dispatch and audio sample processing, then release it while their tasks wait. The AMOLED-1.8 profile keeps the upstream fixed-frequency configuration; enabling dynamic scaling there needs a separate physical power/audio report. GPIO encoder transitions are queued by an ISR and decoded by the input task; queue overflow discards incomplete detents and logs a warning. I2C diagnostics stop scanning when their two-second budget expires. These checks still need physical timing and audio validation.

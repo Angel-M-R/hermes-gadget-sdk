@@ -17,7 +17,11 @@ class Generations {
   // The app leaves the current connection (before connecting again, or for good).
   void leave() { ++current_; }
   // A client reports its connection lost (any task).
-  void lost(uint32_t generation) { lost_.store(generation); }
+  void lost(uint32_t generation) {
+    uint32_t previous = lost_.load();
+    while (is_current(generation) &&
+           !lost_.compare_exchange_weak(previous, generation)) {}
+  }
   // True once per loss of the current connection; losses of connections the app
   // has already left are not news.
   bool take_lost() {

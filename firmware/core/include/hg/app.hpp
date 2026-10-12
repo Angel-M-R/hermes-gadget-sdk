@@ -144,6 +144,8 @@ class App {
   // Optional: the temporary network's name and password, so the setup screen can
   // show a QR code. The port sets this only where it has the values.
   std::function<WifiSetupAp()> on_wifi_setup_ap;
+  // Wake or newly connected external power can shorten the port's Wi-Fi backoff.
+  std::function<void()> on_network_retry;
 
   // Serial-console command (provisioning, bench automation). Returns the
   // response; machine-readable lines start with '@'.

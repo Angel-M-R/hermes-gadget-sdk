@@ -318,6 +318,7 @@ void Ui::render(const UiModel& m) {
   hashes[2] =
       Hash().val(m.screen).add(m.detail).add(m.body).val(m.qr ? m.qr->size : 0).add(m.code).val(m.scroll).val(m.color_test)
             .val(m.volume).val(m.muted).val(m.large_text).val(m.language).get();
+  if (m.qr) hashes[2] = Hash().val(hashes[2]).add(m.qr->modules.data(), m.qr->modules.size()).get();
   hashes[3] = Hash().add(m.hint).val(m.reading).val(m.screen).val(m.language)
                   .val(m.reading != Reading::None ? hashes[2] : 0u).get();
 
@@ -443,7 +444,8 @@ void Ui::draw_top(Canvas& c, const UiModel& m) {
 void Ui::draw_round_battery(const UiModel& m) {
   const int s = layout_.scale;
   const int bh = 7 * s;  // the taller of the icon (5s + 1) and the text (7s)
-  const int hw = (m.battery >= 0 ? battery_width(m) : 0) / 2 + 2 * s;
+  const int width = m.battery >= 0 ? battery_width(m) : m.usb_power ? Canvas::text_width("USB", s) : 0;
+  const int hw = width / 2 + 2 * s;
   const int radius = panel_.width / 2;
   int y0 = 0;
   // The first row where the strip's top corners lie inside the circle.
@@ -451,13 +453,14 @@ void Ui::draw_round_battery(const UiModel& m) {
   y0 = std::min(y0 + 3 * s, std::max(0, oy_ - bh));
   const int y1 = std::min<int>(oy_, y0 + bh);
   const uint32_t key = Hash().val(m.battery).val(m.battery_charging).val(m.battery_low).val(m.battery_icon)
-                           .val(m.battery_text).val(y0).get();
+                           .val(m.battery_text).val(m.usb_power).val(y0).get();
   if (valid_ && key == battery_hash_) return;
   battery_hash_ = key;
   Canvas panel(display_.framebuffer(), panel_.width, panel_.height, panel_.swap_bytes);
   // Clear the band the strip can occupy at any level, so a shorter or hidden strip leaves nothing behind.
   panel.fill_rect(0, 0, panel_.width, oy_, bg_);
   if (m.battery >= 0) draw_battery(panel, m, (panel_.width - battery_width(m)) / 2, (y0 + y1) / 2);
+  else if (m.usb_power) panel.text((panel_.width - width) / 2, y0, "USB", s, kDim);
   display_.flush(0, static_cast<uint16_t>(oy_));
 }
 

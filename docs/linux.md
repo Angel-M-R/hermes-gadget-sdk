@@ -327,3 +327,5 @@ hermes-gadget`. Remove its unit from `/etc/systemd/system/hermes-gadget.service`
 and its helper from `/usr/local/bin/hermes-gadget-device`, then run
 `sudo systemctl daemon-reload`. Application files are under
 `/opt/hermes-gadget`. Retain configuration and state if you may reinstall later.
+
+Install and rollback share an interprocess lock. An update restores the previous release if service startup fails or the control socket never answers; it clears systemd's start-limit state before restarting the previous release. `HERMES_GADGET_HEALTH_TIMEOUT` accepts 1..9999 seconds and defaults to 30. The hash-locked dependencies include the required WebSocket client, and the installer checks its import before switching releases.

@@ -15,7 +15,7 @@ constexpr const char* kNamespace = "hgadget";
 // NVS keys are limited to 15 characters; every core setting key fits. A longer
 // key is refused rather than cut, so two settings can never share a slot.
 bool key_of(std::string_view key, std::string& out) {
-  if (key.empty() || key.size() > NVS_KEY_NAME_MAX_SIZE - 1) {
+  if (key.empty() || key.size() > NVS_KEY_NAME_MAX_SIZE - 1 || key.find('\0') != std::string_view::npos) {
     ESP_LOGE(TAG, "key '%.*s' is not 1..%d characters", static_cast<int>(key.size()), key.data(), NVS_KEY_NAME_MAX_SIZE - 1);
     return false;
   }

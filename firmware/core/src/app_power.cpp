@@ -9,6 +9,7 @@ bool App::wake_display() {
   display_off_by_user_ = false;
   const bool sleeping = display_sleeping_;
   if (display_dimmed_ || sleeping) {
+    if (on_network_retry) on_network_retry();
     display_dimmed_ = display_sleeping_ = false;
     if (sleeping) hal_.display->set_sleep(false);
     hal_.display->set_backlight(brightness_);
@@ -43,7 +44,10 @@ void App::on_power_key() {
 
 void App::power_tick() {
   if (hal_.power && (!power_read_at_ || now() - power_read_at_ >= 5000)) {
+    const bool was_on_battery = power_status_ && power_status_->external_power == std::optional<bool>(false);
     power_status_ = hal_.power->read();
+    if (was_on_battery && power_status_ && power_status_->external_power == std::optional<bool>(true) && on_network_retry)
+      on_network_retry();
     power_read_at_ = now();
     sensors_dirty_ = true;
     update_model();

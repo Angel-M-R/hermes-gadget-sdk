@@ -10,9 +10,20 @@ FIRMWARE = REPO / "firmware"
 
 
 def _code_lines(path):
-    """Each line without its // comment, with its number."""
-    for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
-        yield number, line.split("//", 1)[0]
+    """Code only, preserving line numbers and excluding literals and comments."""
+    tokens = re.compile(r'"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'|//[^\n]*|/\*.*?\*/', re.DOTALL)
+    source = tokens.sub(lambda m: re.sub(r"[^\n]", " ", m.group()), path.read_text(encoding="utf-8"))
+    yield from enumerate(source.splitlines(), start=1)
+
+
+def test_a_url_before_a_call_does_not_hide_code(tmp_path):
+    path = tmp_path / "code.cpp"
+    path.write_text('const char* u = "https://x"; esp_websocket_client_close(c); // comment\n'
+                    '/* esp_websocket_client_close(c); */\n'
+                    'const char* s = "esp_websocket_client_close(c)";\n')
+    lines = list(_code_lines(path))
+    assert "esp_websocket_client_close(c)" in lines[0][1]
+    assert "esp_websocket_client_close" not in lines[1][1] + lines[2][1]
 
 
 def test_firmware_never_calls_the_websocket_close_that_ignores_its_timeout():

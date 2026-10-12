@@ -512,15 +512,39 @@ def _staged_at_final_report(monkeypatch):
     from hermes_gadget_plugin import ota
 
     seen = {}
-    report = ota.UpdateQueue.report
+    report = ota.UpdateQueue._report
 
     def recording(self, device_id, **status):
         if status.get("state") in ("done", "failed"):
             seen[status["state"]] = self.pending()
         report(self, device_id, **status)
 
-    monkeypatch.setattr(ota.UpdateQueue, "report", recording)
+    monkeypatch.setattr(ota.UpdateQueue, "_report", recording)
     return seen
+
+
+def test_completing_an_old_install_preserves_a_new_staged_image(gadget, tmp_path):
+    from fakes.fake_firmware import fake_image
+    from hermes_gadget_plugin import ota
+    queue = ota.UpdateQueue(tmp_path)
+    device_id = "hg-0123456789abcdef"
+    image = ota.inspect_image(fake_image())
+    old = queue.stage(device_id, image)
+    replacement = []
+
+    class Session:
+        name = "Desk"
+        async def update_firmware(self, data, *, progress):
+            assert data == image.data
+            replacement.append(queue.stage(device_id, image))
+            progress(image.size, image.size)
+            return image.version
+    session = Session()
+    session.device_id = device_id
+    gadget.run(gadget.adapter._install_staged(queue, session))
+    assert replacement[0] != old
+    assert queue.load(device_id)[1]["stage_id"] == replacement[0]
+    assert queue.status(device_id) is None
 
 
 def test_staged_firmware_is_installed_once_the_device_is_online(gadget, make_sim, monkeypatch, tmp_path):

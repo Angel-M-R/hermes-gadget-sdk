@@ -26,6 +26,23 @@ def test_open_device_reaches_ready_and_text_round_trips(devserver, make_sim):
     assert sim.wait_screen("ready", timeout=5)
 
 
+@pytest.mark.parametrize("raises", [False, True])
+def test_native_core_reports_a_failed_storage_callback(monkeypatch, raises):
+    from hermes_gadget.sim import Simulator
+    sim = Simulator()
+    def fail(key, value):
+        if raises:
+            raise OSError("disk full")
+        return False
+    monkeypatch.setattr(sim, "storage_set", fail)
+    try:
+        sim.start(network=False)
+        assert any("could not save the device key" in message for _, message in sim.logs)
+        assert sim.storage.get("device_key") is None
+    finally:
+        sim.close()
+
+
 def test_spanish_reply_survives_host_shaping_and_device_rendering(devserver, make_sim):
     hub, _brain, url = devserver()
     sim = make_sim(url)

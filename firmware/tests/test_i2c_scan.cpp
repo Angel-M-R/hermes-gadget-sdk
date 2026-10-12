@@ -19,18 +19,21 @@ struct FakeBus {
   std::map<uint16_t, int> busy;  // address -> probes that time out first (-1: every one)
   uint16_t stuck_from = 0xFFFF;
   int probes = 0, pauses = 0;
+  uint32_t clock = 0;
+  uint32_t now_ms() { return clock; }
 
   Probe probe(uint16_t addr) {
     ++probes;
-    if (addr >= stuck_from) return Probe::Timeout;
+    if (addr >= stuck_from) { clock += 50; return Probe::Timeout; }
     auto b = busy.find(addr);
     if (b != busy.end() && b->second != 0) {
       if (b->second > 0) --b->second;
+      clock += 50;
       return Probe::Timeout;
     }
     return present.count(addr) ? Probe::Ack : Probe::Nack;
   }
-  void pause() { ++pauses; }
+  void pause() { ++pauses; clock += 20; }
 };
 
 // The parts on the AMOLED-1.75 boards: ES8311, TCA9554, AXP2101, ES7210, CST9217.
@@ -93,4 +96,12 @@ TEST("i2c scan: a bus that sticks partway keeps what answered before") {
   FakeBus bus = amoled();
   bus.stuck_from = 0x19;
   CHECK(hg::i2c_scan::scan(bus) == Entries({"0x18", "bus stuck at 0x19"}));
+}
+
+TEST("i2c scan: nonconsecutive timeouts cannot exceed the console budget") {
+  FakeBus bus;
+  for (uint16_t a = 0x08; a < 0x78; a += 2) bus.busy[a] = -1;
+  auto report = hg::i2c_scan::scan(bus);
+  CHECK(!report.empty() && report.back() == "scan budget exhausted");
+  CHECK(bus.clock <= 2050);
 }

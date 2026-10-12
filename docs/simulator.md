@@ -134,3 +134,5 @@ sim.close()
 ```
 
 `tests/test_sim_hub.py` and `tests/test_gateway_e2e.py` are worked examples.
+
+The native simulator library uses ABI 7. Rebuild an older library with `hermes-gadget build-sim`. Storage callbacks now report failed writes to the core, including exceptions from a host callback, so failed identity or settings persistence appears in the device log.

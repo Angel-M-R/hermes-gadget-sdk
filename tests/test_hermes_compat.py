@@ -78,9 +78,16 @@ def test_the_adapter_only_uses_listed_private_hooks():
     source = (REPO / "plugin" / "adapter.py").read_text(encoding="utf-8")
     own = set(re.findall(r"(?m)^\s+(?:async )?def (_[a-z_]+)\(", source))
     own |= set(re.findall(r"self\.(_[a-z_]+)\s*(?::[^=\n]+)?=", source))  # plain and annotated assignments
-    used = set(re.findall(r"(?:self|super\(\))\.(_[a-z][a-z_]*)\b", source))
-    inherited = {name for name in used - own if not name.startswith("__")}
+    used = set(re.findall(r"self\.(_[a-z][a-z_]*)\b", source))
+    base_calls = set(re.findall(r"super\(\)\.(_[a-z][a-z_]*)\b", source))
+    inherited = {name for name in (used - own) | base_calls if not name.startswith("__")}
     assert inherited <= set(compat.ADAPTER_HOOKS), sorted(inherited - set(compat.ADAPTER_HOOKS))
+
+
+def test_instance_fields_are_checked_after_base_initialization():
+    with pytest.raises(RuntimeError, match="_auto_tts_disabled_chats"):
+        compat.check(_hermes(), adapter=types.SimpleNamespace())
+    compat.check(_hermes(), adapter=types.SimpleNamespace(_auto_tts_disabled_chats=set()))
 
 
 @requires_hermes

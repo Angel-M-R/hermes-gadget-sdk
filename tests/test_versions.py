@@ -57,3 +57,10 @@ def test_the_tag_needs_its_changelog_section(tmp_path, capsys):
     assert check_versions.main(["--repo", str(repo), "--tag", f"v{version}"]) == 1
     assert f"CHANGELOG.md has no '## {version}' section" in capsys.readouterr().err
     assert check_versions.main(["--repo", str(repo)]) == 0, "without a tag the changelog is not required"
+
+
+def test_a_missing_version_is_reported(tmp_path, capsys):
+    repo = _copy(tmp_path)
+    (repo / "python/hermes_gadget/__init__.py").write_text("# version missing\n")
+    assert check_versions.main(["--repo", str(repo)]) == 1
+    assert "no version found" in capsys.readouterr().err

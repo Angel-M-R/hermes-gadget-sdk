@@ -42,6 +42,7 @@ def test_package_has_matching_binary_checksums_licenses_and_service(tmp_path, mo
     assert b"hermes-gadget-device status" in files["install.sh"], "the installer checks the new release answers"
     assert b"--require-hashes" in files["install.sh"]
     lock = files["requirements.txt"].decode()
+    assert "websockets==" in lock
     assert "sounddevice==" in lock and "gpiozero==" in lock and lock.count("--hash=sha256:") > 20
     for line in files["SHA256SUMS"].decode().splitlines():
         digest, name = line.split("  ", 1)

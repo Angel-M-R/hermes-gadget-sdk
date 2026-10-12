@@ -16,6 +16,7 @@
 #include "panel_cores3.hpp"
 #include "panel_ws185.hpp"
 #include "freertos/task.h"
+#include "scope_exit.hpp"
 
 namespace hgp {
 namespace {
@@ -35,6 +36,16 @@ bool SpiDisplay::on_trans_done(esp_lcd_panel_io_handle_t, esp_lcd_panel_io_event
 }
 
 bool SpiDisplay::begin(const LcdConfig& cfg, i2c_master_bus_handle_t i2c_bus) {
+  bool bus_owned = false;
+  hg::ScopeExit cleanup([&] {
+    bands_.reset();
+    if (panel_) { esp_lcd_panel_del(panel_); panel_ = nullptr; }
+    if (io_) { esp_lcd_panel_io_del(io_); io_ = nullptr; }
+    if (bus_owned) spi_bus_free(kHost);
+    if (done_) { vSemaphoreDelete(done_); done_ = nullptr; }
+    heap_caps_free(bounce_); bounce_ = nullptr;
+    heap_caps_free(fb_); fb_ = nullptr;
+  });
   cfg_ = cfg;
   const bool qspi = cfg.controller == LcdController::St77916;
   bool ili9341 = false;
@@ -87,6 +98,7 @@ bool SpiDisplay::begin(const LcdConfig& cfg, i2c_master_bus_handle_t i2c_bus) {
   }
   std::memset(fb_, 0, px * 2);
   done_ = xSemaphoreCreateBinary();
+  if (!done_) return false;
   // A band takes about 2.6 ms on a 320-px panel at 40 MHz. Allow ten times the
   // band at the configured clock, and never less than 100 ms.
   const uint32_t band_ms = static_cast<uint32_t>(cfg.width) * kBounceRows * 16 / (std::max(1, cfg.spi_mhz) * 1000u) + 1;
@@ -113,6 +125,7 @@ bool SpiDisplay::begin(const LcdConfig& cfg, i2c_master_bus_handle_t i2c_bus) {
   }
   bus.max_transfer_sz = cfg.width * kBounceRows * 2;
   if (!esp_ok(spi_bus_initialize(kHost, &bus, SPI_DMA_CH_AUTO), TAG, "spi_bus_initialize")) return false;
+  bus_owned = true;
 
   esp_lcd_panel_io_spi_config_t io_cfg = {};
   io_cfg.dc_gpio_num = static_cast<gpio_num_t>(cfg.dc);
@@ -202,6 +215,7 @@ bool SpiDisplay::begin(const LcdConfig& cfg, i2c_master_bus_handle_t i2c_bus) {
   }
   if (board_backlight) board_backlight(100);
   ESP_LOGI(TAG, "%s %ux%u ready", controller_name_, cfg.width, cfg.height);
+  cleanup.dismiss();
   return true;
 }
 

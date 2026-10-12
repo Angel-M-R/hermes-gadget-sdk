@@ -35,6 +35,7 @@ TEST("qr: a Wi-Fi payload encodes to a square matrix of the right size") {
   const std::string text = hg::qr::payload("Hermes-A1B2", "3f9c2a1b4d5e6f70");
   const hg::qr::Code code = hg::qr::encode(text);
   CHECK(code.ok());
+  if (!code.ok()) return;
   CHECK_EQ(code.size % 4, 1);  // every QR version is 4n+17
   CHECK(code.size >= 21 && code.size <= 4 * hg::qr::kMaxVersion + 17);
   CHECK_EQ(static_cast<int>(code.modules.size()), code.size * code.size);
@@ -72,4 +73,14 @@ TEST("qr: a payload too large to encode is refused, not truncated") {
 TEST("qr: encoding is deterministic") {
   const std::string text = hg::qr::payload("Net", "password1");
   CHECK_EQ(fingerprint(hg::qr::encode(text)), fingerprint(hg::qr::encode(text)));
+}
+
+TEST("qr: oversized lengths and invalid correction levels are rejected") {
+  const std::string huge(65536, 'A');
+  CHECK(!hg::qr::encode(huge).ok());
+  CHECK_EQ(hg::qr::smallest_version(huge), 0);
+  for (int ecc : {-1, 4, 16, 256}) {
+    CHECK(!hg::qr::encode("hello", ecc).ok());
+    CHECK_EQ(hg::qr::smallest_version("hello", ecc), 0);
+  }
 }

@@ -20,6 +20,7 @@
 #include "axp2101.hpp"
 #include "band_flush.hpp"
 #include "cores3.hpp"
+#include "quadrature.hpp"
 #include "shared_reply.hpp"
 #include "speaker_pa.hpp"
 #include "tag_scanner.hpp"
@@ -140,11 +141,11 @@ class WsTransport final : public hg::Transport {
   QueueHandle_t tx_ = nullptr;
   hg::ws::Generations gens_;
   std::string url_, subprotocol_;
-  // Fragment reassembly, WebSocket task only: an old client's task can still be
-  // delivering a frame after close(), so connect() leaves this alone. Each
-  // message's first frame clears it.
+  // Reassembly and generation checks share a mutex with close(). Old client
+  // callbacks finish before this buffer is cleared for the next connection.
   std::string rx_;
   uint8_t rx_opcode_ = 0;
+  std::mutex rx_mutex_;
 };
 
 // ESP-IDF RGB timing bus with ST7701 command initialization on 3-wire SPI.
@@ -370,8 +371,8 @@ class CodecSpeaker final : public hg::AudioOut {
   std::atomic<bool> flush_{false};
 };
 
-// Polls a touchscreen, a key mirrored on an I/O expander and a rotary encoder
-// from its own task (some controllers need a pause between write and read) and
+// Polls a touchscreen and an expander key, and decodes queued rotary encoder
+// GPIO edges from its own task (some controllers need a pause between write and read) and
 // posts Touch, Key and Encoder events to the app task.
 class TouchInput {
  public:
@@ -386,6 +387,7 @@ class TouchInput {
   bool begin_box_touch(i2c_master_bus_handle_t bus);
   bool read_key(bool& pressed);
   bool sample_encoder(int& direction);
+  static void encoder_edge(void* arg);
   TouchConfig touch_{};
   ExpanderKeyConfig key_{};
   i2c_master_dev_handle_t touch_dev_ = nullptr;
@@ -393,8 +395,9 @@ class TouchInput {
   esp_lcd_touch_handle_t managed_touch_ = nullptr;
   gpio_num_t encoder_a_ = GPIO_NUM_NC;
   gpio_num_t encoder_b_ = GPIO_NUM_NC;
-  uint8_t encoder_state_ = 0;
-  int8_t encoder_accumulator_ = 0;
+  hg::Quadrature encoder_;
+  QueueHandle_t encoder_edges_ = nullptr;
+  std::atomic<bool> encoder_overflow_{false};
 };
 
 class AxpPower final : public hg::Power {
@@ -517,6 +520,8 @@ class Wifi {
   bool joining_ = false, wait_disconnect_ = false;
   uint32_t trial_at_ = 0, setup_until_ = 0, close_at_ = 0;
   hg::WifiRetry retry_;
+  uint32_t power_checked_at_ = 0;
+  bool battery_ = false;
   esp_pm_lock_handle_t attempt_lock_ = nullptr;  // light sleep would stall an attempt
   bool attempt_held_ = false;
   void hold_while_attempting();

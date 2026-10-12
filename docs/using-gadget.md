@@ -25,7 +25,7 @@ Touchscreen reading controls appear once the complete reply text arrives. Pausin
 
 Hold the text area to speak, or tap it in tap-to-talk mode. The bottom reading bar never starts a recording, even if held. Swipe down or press CANCEL to leave a paused reply; if Hermes is still answering, this also stops that turn. The configured screen timeout still applies while reading. The first touch on a sleeping screen only wakes it.
 
-A muted speaker still lets replies play at their own pace, silently, so the text keeps its timing. A screen switched off with PWR stays off while Hermes answers, so you can listen in the dark. A touch, a button, or a question from Hermes turns it back on. On the AMOLED-1.8 the touch controller sleeps while the screen is off, so press BOOT or PWR instead of touching it.
+A muted speaker still lets replies play at their own pace, silently, so the text keeps its timing. A screen switched off with PWR stays off while Hermes answers, so you can listen in the dark. A touch, a button, or a question from Hermes turns it back on. On the AMOLED-1.8, touch remains active while the screen is off; the first touch only wakes it. BOOT and PWR also wake it.
 
 Quick controls change volume in steps of 10 percent and offer **Normal** or **Large** reply text. Spoken audio continues while you adjust them. Tap **Done** or press CANCEL to return to the conversation. A new question from Hermes closes the controls. Volume controls are disabled on boards without a speaker. Holding the title bar for one second opens the full settings menu instead.
 

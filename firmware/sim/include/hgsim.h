@@ -22,7 +22,7 @@ extern "C" {
 #define HGSIM_API __attribute__((visibility("default")))
 #endif
 
-#define HGSIM_ABI_VERSION 6
+#define HGSIM_ABI_VERSION 7
 
 typedef struct hgsim hgsim;
 
@@ -48,7 +48,8 @@ typedef struct hgsim_host {
   void (*speaker_volume)(void* user, int percent);
   /* storage: get returns the value length, or -1 when missing */
   int (*storage_get)(void* user, const char* key, char* out, size_t cap);
-  void (*storage_set)(void* user, const char* key, const char* value);
+  /* set returns 1 when persisted, 0 on failure */
+  int (*storage_set)(void* user, const char* key, const char* value);
   void (*storage_erase)(void* user, const char* key);
   /* system */
   uint32_t (*now_ms)(void* user);

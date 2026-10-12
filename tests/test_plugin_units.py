@@ -141,3 +141,52 @@ def test_an_unapproved_device_expires_and_an_approved_one_stays(tmp_path, monkey
     assert store.key_for("hg-0123456789abcdef") is None, "an unapproved record is gone after its TTL"
     assert "hg-0123456789abcdef" not in store.devices()
     assert store.key_for("hg-fedcba9876543210") == b"j" * 32, "an approved record stays"
+
+
+def test_forget_serializes_with_a_gateway_write(tmp_path, monkeypatch):
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+
+    gateway, cli = DeviceStore(tmp_path), DeviceStore(tmp_path)
+    device = "hg-0123456789abcdef"
+    gateway.enroll(device, b"k" * 32)
+    saving, release, forgetting = threading.Event(), threading.Event(), threading.Event()
+    save = gateway._save
+
+    def paused_save():
+        saving.set()
+        assert release.wait(5)
+        save()
+
+    def forget():
+        forgetting.set()
+        return cli.forget(device)
+
+    monkeypatch.setattr(gateway, "_save", paused_save)
+    with ThreadPoolExecutor(2) as pool:
+        touch = pool.submit(gateway.touch, device)
+        assert saving.wait(5)
+        removed = pool.submit(forget)
+        assert forgetting.wait(5)
+        try:
+            with pytest.raises(TimeoutError):
+                removed.result(timeout=0.15)
+        finally:
+            release.set()
+        touch.result(timeout=5)
+        assert removed.result(timeout=5)
+    assert gateway.key_for(device) is None
+
+
+def test_expired_devices_remove_orphan_pairings_from_disk(tmp_path, monkeypatch):
+    import json
+    from hermes_gadget_plugin import store as storemod
+
+    now = [1000.0]
+    monkeypatch.setattr(storemod.time, "time", lambda: now[0])
+    store = DeviceStore(tmp_path)
+    store.enroll("expired", b"k" * 32)
+    store.remember_pairing("expired", "CODE", "cmd", ttl_s=7200)
+    now[0] += storemod.PENDING_TTL_S + 1
+    assert store.devices() == {}
+    assert json.loads(store.path.read_text())["pairing"] == {}

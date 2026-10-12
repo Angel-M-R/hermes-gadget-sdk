@@ -24,7 +24,16 @@ class TagScanner {
         if (c == tag_[matched_]) {
           ++matched_;
         } else {
-          matched_ = c == tag_[0] ? 1 : 0;
+          // Retain the longest prefix matching a suffix of the bytes seen,
+          // including overlapping prefixes such as aab in aaab.
+          size_t keep = 0;
+          for (size_t n = matched_; n > 0; --n) {
+            if (c == tag_[n - 1] && tag_.substr(matched_ - n + 1, n - 1) == tag_.substr(0, n - 1)) {
+              keep = n;
+              break;
+            }
+          }
+          matched_ = keep;
         }
         continue;
       }

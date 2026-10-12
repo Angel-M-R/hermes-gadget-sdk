@@ -12,7 +12,12 @@ std::vector<uint32_t> waits_on_battery(hg::WifiRetry& r, uint32_t& now, int atte
   for (int i = 0; i < attempts; ++i) {
     r.lost(now, true);
     const uint32_t from = now;
-    while (!r.due(now)) now += 100;
+    bool due = false;
+    for (int poll = 0; poll <= 301; ++poll) {
+      if ((due = r.due(now))) break;
+      now += 100;
+    }
+    CHECK(due);
     waits.push_back(now - from);
     now += 500;  // the attempt runs, then fails
   }
@@ -87,8 +92,11 @@ TEST("wifi retry: an attempt that never answers is abandoned after 20 s") {
   hg::WifiRetry r;
   r.started(1000);
   CHECK(!r.due(1000 + 19900));
-  CHECK(r.due(1000 + 20000));  // timed out, and retried at once
-  CHECK(r.attempting());
+  CHECK(!r.due(1000 + 20000, true));
+  CHECK(!r.attempting());
+  CHECK(r.due(1000 + 23000, true));
+  CHECK(!r.due(1000 + 43000, true));
+  CHECK_EQ(r.retry_at(), 1000u + 49000u);
 }
 
 TEST("wifi retry: a start that fails waits 3 s, without holding the chip awake") {
@@ -98,4 +106,11 @@ TEST("wifi retry: a start that fails waits 3 s, without holding the chip awake")
   r.start_failed(4000);
   CHECK(!r.attempting());
   CHECK_EQ(r.retry_at(), 7000u);
+}
+
+TEST("wifi retry: start failure across clock wrap keeps a retry scheduled") {
+  hg::WifiRetry r;
+  r.start_failed(0u - 3000u);
+  CHECK(r.retry_at() != 0);
+  CHECK(r.due(1));
 }

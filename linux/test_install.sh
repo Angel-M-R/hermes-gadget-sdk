@@ -31,7 +31,7 @@ start() {
 }
 case "$1" in
     is-active) [ -f /service.pid ] && kill -0 "$(cat /service.pid)" 2>/dev/null ;;
-    start) [ -n "${FAKE_START_FAILS:-}" ] || start ;;
+    start) [ -z "${FAKE_START_EXIT:-}" ] || exit 1; [ -n "${FAKE_START_FAILS:-}" ] || start ;;
     stop) stop ;;
     restart) stop; start ;;
     *) ;;
@@ -69,6 +69,7 @@ export HGSIM_LIBRARY=/opt/hermes-gadget/current/libhgsim.so
 "$cli" --version
 systemctl start hermes-gadget.service
 wait_for_status
+/opt/hermes-gadget/current/venv/bin/python -c 'import websockets'
 python3 -c 'import json; s=json.load(open("/status.json")); assert s["board"] == "linux" and s["name"] == "Pi Gadget"'
 sha256sum /var/lib/hermes-gadget/device.json /etc/hermes-gadget/config.json > /saved-state.sha256
 
@@ -122,6 +123,30 @@ fi
 test "$(current)" = "$second"
 grep -q '^restart hermes-gadget.service$' /systemctl.log
 wait_for_status
+
+# A nonzero start command must also restore the previous release.
+set_release_id abababababab
+if FAKE_START_EXIT=1 sh install.sh; then
+    echo 'the installer should have reported the start failure' >&2
+    exit 1
+fi
+test "$(current)" = "$second"
+grep -q '^reset-failed hermes-gadget.service$' /systemctl.log
+wait_for_status
+
+if HERMES_GADGET_HEALTH_TIMEOUT=invalid sh install.sh; then
+    echo 'the installer should reject a non-numeric timeout' >&2
+    exit 1
+fi
+test "$(current)" = "$second"
+
+exec 8>/opt/hermes-gadget/install.lock
+flock -n 8
+if hermes-gadget-device rollback; then
+    echo 'rollback must not overlap an installation' >&2
+    exit 1
+fi
+flock -u 8
 
 # 7. Old releases are pruned: the newest three stay, plus current and previous.
 set_release_id cccccccccccc

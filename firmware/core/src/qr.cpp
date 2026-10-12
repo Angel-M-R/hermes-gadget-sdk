@@ -47,6 +47,7 @@ std::string payload(std::string_view ssid, std::string_view password) {
 }
 
 int smallest_version(std::string_view text, int ecc) {
+  if (text.size() > UINT16_MAX || ecc < 0 || ecc > 3) return 0;
   QRCode q;
   for (int version = 1; version <= kMaxVersion; ++version) {
     if (qrcode_initBytes(&q, g_modules, static_cast<uint8_t>(version), static_cast<uint8_t>(ecc),
@@ -59,6 +60,7 @@ int smallest_version(std::string_view text, int ecc) {
 }
 
 Code encode(std::string_view text, int ecc) {
+  if (text.size() > UINT16_MAX || ecc < 0 || ecc > 3) return {};
   QRCode q;
   for (int version = 1; version <= kMaxVersion; ++version) {
     if (qrcode_initBytes(&q, g_modules, static_cast<uint8_t>(version), static_cast<uint8_t>(ecc),
