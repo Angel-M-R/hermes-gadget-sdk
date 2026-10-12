@@ -2,7 +2,7 @@
 
 The wizard runs it when the user picks Hermes Gadget (``register_platform(setup_fn=...)``) and
 offers to restart the gateway afterwards. This enables the platform, asks for the port,
-applies the branch's voice on every setup, and points at the browser installer and pairing command.
+preserves Hermes's speech configuration, and points at the browser installer and pairing command.
 """
 
 from __future__ import annotations
@@ -10,9 +10,6 @@ from __future__ import annotations
 from . import cli
 
 DEFAULT_PORT = 8765
-DEFAULT_TTS_PROVIDER = "edge"
-DEFAULT_TTS_VOICE = "es-ES-XimenaNeural"
-DEFAULT_TTS_NAME = "Ximena (Spanish, Spain)"
 
 
 def _ui():
@@ -77,18 +74,7 @@ def interactive_setup() -> None:
     else:
         print_warning("Couldn't update config.yaml from here. Run: hermes config set platforms.gadget.enabled true")
 
-    # The voice first: all() stops at a failed write, so the provider never switches without it.
-    voice_settings = [(f"tts.{DEFAULT_TTS_PROVIDER}.voice", DEFAULT_TTS_VOICE),
-                      ("tts.provider", DEFAULT_TTS_PROVIDER)]
-    if all(_set_config(key, value) for key, value in voice_settings):
-        print_success(f"Voice configured: {DEFAULT_TTS_NAME} ({DEFAULT_TTS_PROVIDER})")
-    else:
-        print_warning("Couldn't configure the branch voice. Run these commands on the Hermes host:")
-        for key, value in voice_settings:
-            print_info(f"  hermes config set {key} {value}")
-    print_info("Voice settings apply to this Hermes host, including other chats that use its TTS configuration.")
-    print_info("The voice engine is a declared plugin dependency; enable the plugin through Hermes to install it.")
-    print_info("Install ffmpeg on the Hermes host to play speech through the gadget.")
+    print_info("Speech uses the provider and voice configured in Hermes. Install ffmpeg on the Hermes host.")
 
     url = cli.device_url({**extra, "port": port})
     print_info(f"Devices connect to {url}")

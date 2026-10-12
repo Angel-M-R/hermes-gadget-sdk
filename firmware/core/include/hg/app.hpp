@@ -76,6 +76,13 @@ struct Action {
   std::function<bool(const json::Value& args, json::Value& result, std::string& error)> handler;
 };
 
+// The temporary Wi-Fi setup network, as the port knows it. Lets the setup
+// screen show a scannable code beside the credentials.
+struct WifiSetupAp {
+  std::string ssid;
+  std::string password;
+};
+
 class App {
  public:
   App(Hal& hal, DeviceProfile profile);
@@ -114,24 +121,31 @@ class App {
   // from Hermes still wakes it.
   void on_power_key();
   // The on-screen speaker button (touch screens with a speaker): holding it
-  // mutes or unmutes, a tap only says so. TouchGestures reports the touch;
+  // mutes or unmutes, a tap opens quick controls. TouchGestures reports the touch;
   // Leave is the finger sliding off, or lifting after a hold.
   enum class SpeakerTouch : uint8_t { Down, Hold, Tap, Leave };
   bool speaker_button_hit(int x, int y) const;
   void on_speaker_button(SpeakerTouch touch);
+  // Local text navigation: never records, sends a request or pauses the speaker.
+  ReadingControl reading_control_hit(int x, int y) const;
+  void on_reading_control(ReadingControl control);
+  bool open_quick_controls();
+  void close_quick_controls();
+  bool quick_controls_open() const { return quick_controls_open_; }
+  QuickControl quick_control_hit(int x, int y) const;
+  void on_quick_control(QuickControl control);
   bool muted() const { return muted_; }
   bool start_wifi_setup();
   void close_wifi_setup();
   bool wifi_setup_open() const { return !wifi_setup_text_.empty(); }
-  // These run on the app task. Start returns private, on-screen instructions
-  // (empty when setup can't start) and, for a QR code beside them, the text
-  // that joins the setup network (wifi_join_code).
-  struct WifiSetup {
-    std::string text;
-    std::string join_code;
-  };
-  std::function<WifiSetup()> on_wifi_setup;
+  // Runs on the app task. Empty instructions mean setup could not start.
+  std::function<std::string()> on_wifi_setup;
   std::function<void()> on_wifi_setup_close;
+  // Optional: the temporary network's name and password, so the setup screen can
+  // show a QR code. The port sets this only where it has the values.
+  std::function<WifiSetupAp()> on_wifi_setup_ap;
+  // Wake or newly connected external power can shorten the port's Wi-Fi backoff.
+  std::function<void()> on_network_retry;
 
   // Serial-console command (provisioning, bench automation). Returns the
   // response; machine-readable lines start with '@'.
@@ -237,6 +251,8 @@ class App {
   void dismiss_overlay();
   // A question from Hermes is on screen (it waits while the user is recording).
   bool prompt_showing() const;
+  // Holding the title (or round settings target) would open or close settings.
+  bool settings_hold_live() const;
   // True when a press that started at `pressed_at` may answer the question.
   bool prompt_armed(uint32_t pressed_at) const;
   void answer_prompt(bool yes);
@@ -247,6 +263,8 @@ class App {
   void log(LogLevel level, std::string_view msg);
   uint32_t now() const { return hal_.system->now_ms(); }
   bool speaking() const;
+  bool play_recording_cue(bool start);
+  const char* tr(const char* english) const { return localized(english, language_); }
   std::string next_id(char prefix);
 
   Hal& hal_;
@@ -264,22 +282,35 @@ class App {
   uint8_t volume_ = 70;
   bool muted_ = false;
   bool speaker_pressed_ = false;  // a finger is on the speaker button
+  bool quick_controls_open_ = false;
+  bool large_text_ = false;
+  Language language_ = Language::English;
+  uint32_t end_silence_ms_ = 900;
+  bool recording_cues_ = false, recording_cue_pending_ = false;
+  uint32_t recording_cue_at_ = 0;
   uint8_t brightness_ = 100;
   enum class Menu : uint8_t { Closed, Volume, Brightness, TalkMode, Microphone, Speaker, Display, Inputs, Info,
-                              Power, IdleTimer, PowerOff, WifiSetup, Back };
+                              Power, IdleTimer, PowerOff, WifiSetup, EndSilence, RecordingCues, TextSize, Language, Back };
   enum class HardwareCheck : uint8_t { None, Microphone, Speaker, Display, Inputs };
   Menu menu_ = Menu::Closed;
   HardwareCheck hardware_check_ = HardwareCheck::None;
   std::string check_result_;
-  std::string wifi_setup_text_, wifi_setup_code_;
+  std::string wifi_setup_text_;
+  // The setup network's scannable code, encoded once when the screen opens.
+  qr::Code wifi_setup_qr_;
   bool talk_held_ = false;
   bool settings_chord_fired_ = false;
   uint32_t talk_down_at_ = 0;
   bool talk_release_pending_ = false;  // TALK is up, within talk_release_grace_ms
   uint32_t talk_up_at_ = 0;
   std::optional<PowerStatus> power_status_;
-  uint32_t power_read_at_ = 0, activity_at_ = 0;
+  uint32_t power_read_at_ = 0, activity_at_ = 0, power_key_polled_at_ = 0;
   uint32_t screen_timeout_ms_ = 0;
+  // What the battery indicator shows, in the order a tap cycles through.
+  enum class BatteryIndicator : uint8_t { Icon, Percentage, Both, Off };
+  BatteryIndicator battery_display_ = BatteryIndicator::Off;
+  // Whether the indicator could show anything: a percentage from a fitted battery.
+  bool battery_readable() const;
   bool display_dimmed_ = false, display_sleeping_ = false, power_off_armed_ = false;
   bool display_off_by_user_ = false;  // the power key switched it off
   uint8_t wake_buttons_ = 0;
@@ -319,6 +350,7 @@ class App {
   uint32_t last_turn_rx_ = 0;
   std::string reply_;
   uint32_t reply_until_ = 0;  // reply text shown on the Ready screen until then
+  bool reading_paused_ = false;  // holds both the page and the reply on screen
   bool cancel_held_ = false;
   bool cancel_long_fired_ = false;
   uint32_t cancel_down_at_ = 0;

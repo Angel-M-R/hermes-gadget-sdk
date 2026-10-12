@@ -15,11 +15,38 @@ KEY = bytes(range(32))
 DEVICE_ID = protocol.device_id_for_key(KEY)
 
 
+def test_progress_and_completion_do_not_read_the_firmware_again(tmp_path, monkeypatch):
+    queue = ota.UpdateQueue(tmp_path)
+    stage_id = queue.stage(DEVICE_ID, ota.inspect_image(fake_image()))
+    image_path = queue._path(DEVICE_ID, ".bin")
+    read_bytes = type(image_path).read_bytes
+
+    def guarded_read(path):
+        if path == image_path:
+            pytest.fail("status operations must not allocate the firmware image")
+        return read_bytes(path)
+
+    monkeypatch.setattr(type(image_path), "read_bytes", guarded_read)
+    assert queue.count_attempt(DEVICE_ID, stage_id) == 1
+    queue.report(DEVICE_ID, expected_id=stage_id, state="sending", sent=1024)
+    assert queue.status(DEVICE_ID)["sent"] == 1024
+    assert queue.complete(DEVICE_ID, stage_id, state="done")
+    assert queue.status(DEVICE_ID)["state"] == "done"
+    assert not image_path.exists()
+
+
 def test_an_image_says_what_it_is():
     image = ota.inspect_image(fake_image(board="esp32s3-touch-amoled-1.75", version="0.3.1"))
     assert (image.version, image.board, image.size) == ("0.3.1", "esp32s3-touch-amoled-1.75", 150_000)
     assert image.sha256 == hashlib.sha256(image.data).hexdigest()
     assert ota.inspect_image(fake_image(board=None)).board is None  # firmware older than the board tag
+
+
+def test_a_nameless_copy_of_the_board_tag_is_skipped():
+    # Images built from main before this fix (never released) also hold the device's bare search text ahead of the real tag.
+    data = bytearray(fake_image(board="esp32s3-touch-amoled-1.75c"))
+    data[1024:1033] = b"HGBOARD=\0"
+    assert ota.inspect_image(bytes(data)).board == "esp32s3-touch-amoled-1.75c"
 
 
 @pytest.mark.parametrize("data, code", [
@@ -154,6 +181,21 @@ def test_the_queue_hands_staged_images_to_the_gateway(tmp_path):
         queue.stage("../evil", image)
 
 
+def test_a_finished_update_cannot_complete_or_drop_its_replacement(tmp_path):
+    gateway, cli = ota.UpdateQueue(tmp_path), ota.UpdateQueue(tmp_path)
+    image = ota.inspect_image(fake_image())
+    old = cli.stage(DEVICE_ID, image)
+    new = cli.stage(DEVICE_ID, image)
+    assert old != new
+    assert not gateway.complete(DEVICE_ID, old, state="done", version=image.version)
+    gateway.report(DEVICE_ID, expected_id=old, state="sending", sent=10)
+    assert cli.status(DEVICE_ID) is None
+    assert cli.load(DEVICE_ID)[1]["stage_id"] == new
+    assert gateway.complete(DEVICE_ID, new, state="done", version=image.version)
+    assert cli.load(DEVICE_ID) is None
+    assert cli.status(DEVICE_ID)["stage_id"] == new
+
+
 @pytest.fixture
 def cli_store(tmp_path, monkeypatch):
     from hermes_gadget_plugin import cli
@@ -178,10 +220,44 @@ def test_hermes_gadget_update_stages_and_waits_for_the_gateway(cli_store, monkey
     assert "Staged firmware 0.2.0" in capsys.readouterr().out
 
     reports = iter([dict(state="sending", sent=50, size=100), dict(state="done", version="0.2.0")])
-    monkeypatch.setattr(cli.time, "sleep", lambda s: queue.report(DEVICE_ID, **next(reports)))
+    def gateway_report(_):
+        stage_id = queue.load(DEVICE_ID)[1]["stage_id"]
+        status = next(reports)
+        if status["state"] == "done":
+            queue.complete(DEVICE_ID, stage_id, **status)
+        else:
+            queue.report(DEVICE_ID, expected_id=stage_id, **status)
+    monkeypatch.setattr(cli.time, "sleep", gateway_report)
     cli._cmd_update(types.SimpleNamespace(latest=False, force=False, device=DEVICE_ID, image=str(firmware), no_wait=False, timeout=30))
     out = capsys.readouterr().out
     assert "sending: 50%" in out and "Installed 0.2.0. Desk restarts into it" in out
+
+
+def test_waiting_for_an_offline_device_does_not_reread_the_firmware(cli_store, monkeypatch):
+    from hermes_gadget_plugin import cli
+
+    store, firmware = cli_store
+    store.enroll(DEVICE_ID, KEY, name="Desk", board="sim-320x240")
+    queue = ota.UpdateQueue(store.path.parent)
+    image_path = queue._path(DEVICE_ID, ".bin")
+    read_bytes = type(image_path).read_bytes
+
+    def guarded_read(path):
+        if path == image_path:
+            pytest.fail("waiting must not allocate the staged firmware image")
+        return read_bytes(path)
+
+    polls = []
+    def offline_then_replaced(_):
+        polls.append(1)
+        if len(polls) == 3:  # another image is staged while this command waits
+            queue.stage(DEVICE_ID, ota.inspect_image(fake_image(board="sim-320x240", version="0.2.1")))
+    monkeypatch.setattr(type(image_path), "read_bytes", guarded_read)
+    monkeypatch.setattr(cli.time, "sleep", offline_then_replaced)
+    with pytest.raises(SystemExit) as stop:
+        cli._cmd_update(types.SimpleNamespace(latest=False, force=False, device=DEVICE_ID, image=str(firmware), no_wait=False, timeout=30))
+    assert "replaced by another staged image" in str(stop.value)
+    assert len(polls) == 3
 
 
 def test_hermes_gadget_update_refuses_another_boards_image(cli_store):

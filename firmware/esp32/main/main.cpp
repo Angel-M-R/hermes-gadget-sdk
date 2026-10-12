@@ -1,12 +1,14 @@
 // Hermes Gadget firmware entry point: wires the ESP32 drivers to the portable
 // core (hg::App) and runs the app loop on the main task.
 #include "port.hpp"  // first: pulls in FreeRTOS.h ahead of task.h/queue.h
+#include "port_pm.hpp"
 
 #include <cstring>
 
 #include "driver/gpio.h"
 #include "esp_app_desc.h"
 #include "esp_log.h"
+#include "esp_pm.h"
 #include "esp_psram.h"
 #include "hg/touch.hpp"
 #include "nvs_flash.h"
@@ -21,6 +23,7 @@ hgp::NvsStorage g_storage;
 hgp::WsTransport g_transport;
 hgp::SpiDisplay g_display;
 hgp::ParallelDisplay g_parallel;
+hgp::RgbDisplay g_rgb;
 hgp::AmoledDisplay g_amoled;
 hgp::I2sMic g_mic;
 hgp::I2sSpeaker g_speaker;
@@ -120,8 +123,7 @@ void dispatch(hg::App& app, hgp::Event& ev) {
       app.on_mic_samples(reinterpret_cast<const int16_t*>(ev.data), ev.len / sizeof(int16_t));
       break;
     case EventType::Console:
-      ev.console->reply = app.console(std::string_view(text ? text : "", ev.len));
-      xSemaphoreGive(ev.console->done);
+      ev.console->answer(app.console(std::string_view(text ? text : "", ev.len)));
       break;
     case EventType::Touch:
       if (g_gestures && ev.len == sizeof(hgp::TouchSample)) {
@@ -132,6 +134,16 @@ void dispatch(hg::App& app, hgp::Event& ev) {
     case EventType::Key:
       if (g_key_cancel && ev.len == sizeof(hgp::KeySample)) {
         app.on_button(hg::Button::Cancel, reinterpret_cast<const hgp::KeySample*>(ev.data)->pressed);
+      }
+      break;
+    case EventType::Encoder:
+      if (ev.len == sizeof(hgp::EncoderSample)) {
+        // A detent is a press and a release, so turning keeps scrolling after
+        // the first detent wakes the screen.
+        const auto* encoder = reinterpret_cast<const hgp::EncoderSample*>(ev.data);
+        const hg::Button button = encoder->direction > 0 ? hg::Button::Up : hg::Button::Down;
+        app.on_button(button, true);
+        app.on_button(button, false);
       }
       break;
   }
@@ -160,8 +172,18 @@ extern "C" void app_main(void) {
              kPsramMode);
   }
 #endif
+#if CONFIG_PM_ENABLE
+  // Boards that enable power management let the CPU drop to 80 MHz when idle;
+  // drivers hold it up while they work. No light sleep: the display, touch and
+  // audio paths expect their clocks to keep running.
+  esp_pm_config_t pm = {};
+  pm.max_freq_mhz = CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ;
+  pm.min_freq_mhz = 80;
+  pm.light_sleep_enable = false;
+  if (esp_pm_configure(&pm) != ESP_OK) ESP_LOGW(TAG, "power management unavailable; the CPU stays at full speed");
+#endif
+  g_updater.expect_board(board.name);
   g_updater.start();  // a new firmware on probation starts its clock now
-  hgp::cpu::begin();
 
   // Wi-Fi first: the radio is the entropy source for the device key.
   g_wifi.begin(g_storage);
@@ -173,13 +195,14 @@ extern "C" void app_main(void) {
   if (latch_power) hal.power = &g_latch_power;
   if (g_updater.capacity()) hal.updater = &g_updater;
   i2c_master_bus_handle_t i2c_bus = hgp::i2c::bus(board.i2c);
-  const bool peripherals_ready =
-      (!board.cores3 || g_cores3.begin(i2c_bus)) &&
-      (!board.expander_resets.enabled || hgp::expander::release_resets(board.expander_resets, i2c_bus));
+  const bool peripherals_ready = (!board.cores3 || g_cores3.begin(i2c_bus)) &&
+      (!board.expander_reset.mask || hgp::tca9554_reset(i2c_bus, board.expander_reset));
   if (board.cores3 && peripherals_ready)
     g_display.board_backlight = [](uint8_t percent) { g_cores3.set_backlight(percent); };
   if (peripherals_ready && board.lcd.enabled) {
-    if (board.lcd.bus.type == hgp::LcdBus::Type::I80) {
+    if (board.lcd.bus.type == hgp::LcdBus::Type::Rgb) {
+      if (g_rgb.begin(board.lcd, i2c_bus)) hal.display = &g_rgb;
+    } else if (board.lcd.bus.type == hgp::LcdBus::Type::I80) {
       if (g_parallel.begin(board.lcd, hgp::lcd_power_pin(board))) hal.display = &g_parallel;
     } else if (g_display.begin(board.lcd, i2c_bus)) {
       hal.display = &g_display;
@@ -189,31 +212,31 @@ extern "C" void app_main(void) {
   }
   if (board.mic.enabled && g_mic.begin(board.mic)) hal.mic = &g_mic;
   if (board.speaker.enabled && g_speaker.begin(board.speaker)) hal.speaker = &g_speaker;
-  if (board.axp2101 && g_power.begin(i2c_bus)) hal.power = &g_power;
-  const bool power_key = board.axp_power_key && hal.power == &g_power && g_power.enable_power_key();
+  if (board.axp2101 && g_power.begin(i2c_bus)) {
+    hal.power = &g_power;
+    if (board.axp_power_key) g_power.use_power_key();
+    g_power.use_curves(board.battery_curve, board.battery_charge_curve);
+    // Wi-Fi retries back off only on battery; unknown counts as plugged in.
+    g_wifi.on_battery = [] { return g_power.external_power() == std::optional<bool>(false); };
+  }
   const bool audio_power = peripherals_ready && (!board.axp_audio_supply || g_power.enable_audio_supply());
   if (!audio_power) ESP_LOGE(TAG, "audio supply unavailable");
   if (board.codec.enabled && audio_power && g_codec.begin(board.codec, i2c_bus)) {
-    if (g_codec_mic.begin(g_codec.in())) hal.mic = &g_codec_mic;
-    if (g_codec_speaker.begin(g_codec.out())) hal.speaker = &g_codec_speaker;
+    if (g_codec_mic.begin(g_codec.in(), board.codec.rmnm_mics, g_codec.mic_link())) hal.mic = &g_codec_mic;
+    if (g_codec_speaker.begin(g_codec.out(), board.codec.stereo32, board.codec.speaker_pa ? board.codec.pa : -1)) hal.speaker = &g_codec_speaker;
   }
   g_buttons.begin(board.buttons);
-  const bool touch = peripherals_ready && (board.touch.enabled || board.pwr_key.enabled) &&
-                     g_touch.begin(board.touch, board.pwr_key, i2c_bus);
-  if (hal.display == &g_amoled && board.amoled.sleep_when_dark) {
-    g_amoled.board_sleep = [](bool asleep) {
-      g_touch.set_sleep(asleep);
-      hgp::cpu::set_full_speed(!asleep);
-    };
-  }
+  const bool touch = peripherals_ready && (board.touch.enabled || board.pwr_key.enabled || board.encoder.a >= 0) &&
+                     g_touch.begin(board.touch, board.pwr_key, board.encoder, i2c_bus);
 
   hgp::diag::Parts parts;
   parts.display = hal.display == &g_display ? g_display.controller_name()
                       : hal.display == &g_parallel ? "st7789-i80"
+                      : hal.display == &g_rgb ? g_rgb.controller_name()
                       : hal.display == &g_amoled ? "co5300"
                                                 : "none";
-  parts.mic = hal.mic == &g_codec_mic ? (board.codec.mic == hgp::MicCodec::Es8311 ? "es8311" : "es7210") :
-             hal.mic == &g_mic ? "i2s" : "none";
+  parts.mic = hal.mic == &g_codec_mic ? (board.codec.mic == hgp::MicCodec::Es8311 ? "es8311" : "es7210")
+              : hal.mic == &g_mic ? "i2s" : "none";
   parts.speaker = hal.speaker == &g_codec_speaker ?
       (board.codec.speaker == hgp::SpeakerCodec::Aw88298 ? "aw88298" : "es8311") :
       hal.speaker == &g_speaker ? "i2s" : "none";
@@ -230,12 +253,12 @@ extern "C" void app_main(void) {
   profile.default_server_url = CONFIG_HG_DEFAULT_SERVER_URL;
   profile.default_access_token = CONFIG_HG_DEFAULT_ACCESS_TOKEN;
   profile.has_cancel_button = board.buttons.cancel >= 0 || touch;
-  profile.has_scroll_buttons = board.buttons.up >= 0 && board.buttons.down >= 0;
+  profile.has_scroll_buttons = (board.buttons.up >= 0 && board.buttons.down >= 0) || board.encoder.a >= 0;
   profile.talk_label = board.talk_label;
   profile.cancel_label = board.cancel_label;
   profile.talk_release_grace_ms = board.talk_release_grace_ms;
   profile.talk_key = {board.talk_key.edge, board.talk_key.dy};
-  if (power_key) profile.power_key = {board.power_key.edge, board.power_key.dy};
+  if (board.axp_power_key) profile.power_key = {board.power_key.edge, board.power_key.dy};
   if (touch && board.touch.enabled) {
     profile.touch_screen = true;
     profile.extra_settings = {"touch_cancel"};
@@ -254,32 +277,32 @@ extern "C" void app_main(void) {
   };
   app.on_wifi_setup = [] { return g_wifi.start_setup(); };
   app.on_wifi_setup_close = [] { g_wifi.stop_setup(); };
+  app.on_wifi_setup_ap = [] { return g_wifi.setup_ap(); };
+  app.on_network_retry = [] { g_wifi.retry_now(); };
   app.on_diag = [](hg::json::Value& report) {
     hgp::diag::report(report);
     report.set("ota", g_updater.describe());
+    if (const auto ma = g_power.charge_current_ma()) report.set("charge_current_ma", static_cast<unsigned>(*ma));
   };
   app.recent_log = &hgp::diag::recent_log;
   app.begin();
   hgp::console::begin();
 
-  uint32_t power_key_at = 0;
   for (;;) {
     hgp::Event ev;
     // Block briefly for events, then run the core's timers and animations.
-    if (hgp::events::receive(ev, pdMS_TO_TICKS(10))) {
+    const bool received = hgp::events::receive(ev, pdMS_TO_TICKS(10));
+    hgp::CpuWork cpu_work;
+    if (received) {
       do {
         dispatch(app, ev);
         hgp::events::release(ev);
       } while (hgp::events::receive(ev, 0));
     }
+    // A loss whose WsClosed event was dropped; harmless if it was delivered too.
+    if (g_transport.take_lost()) app.on_transport_closed("disconnected");
     g_buttons.poll(app);
-    if (power_key && g_system.now_ms() - power_key_at >= 50) {
-      power_key_at = g_system.now_ms();
-      if (g_power.take_power_key()) app.on_power_key();
-    }
     g_wifi.tick(app, g_system.now_ms());
-    // Keep Wi-Fi awake while audio plays so streaming replies arrive smoothly.
-    g_wifi.set_low_latency(hal.speaker && hal.speaker->busy());
     if (g_gestures) g_gestures->tick(g_system.now_ms());
     app.tick();
   }

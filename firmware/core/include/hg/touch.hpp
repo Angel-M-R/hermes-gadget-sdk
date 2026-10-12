@@ -2,7 +2,9 @@
 // screen is the main input:
 //
 //   hold the title     local settings after one second
-//   hold the speaker   mute or unmute after 0.4 s (a tap only says how)
+//   tap title/speaker  local volume and text controls
+//   hold the speaker   mute or unmute after 0.4 s
+//   tap reading bar    last reply, previous page, pause/resume text, next page
 //   hold elsewhere     TALK, held for as long as the finger stays down
 //   quick tap          a TALK press and release (answers "yes" to a question)
 //   swipe down         a CANCEL press and release (discard, close, stop, "no")
@@ -43,7 +45,7 @@ class TouchGestures {
   void tick(uint32_t now_ms);
 
  private:
-  enum class State : uint8_t { Idle, Pending, Settings, Speaker, SpeakerHeld, Sliding, Talk, Swipe, Ignored };
+  enum class State : uint8_t { Idle, Pending, Settings, Speaker, SpeakerHeld, Reading, Control, Sliding, Talk, Swipe, Ignored };
   void press(Button b);
   void release(Button b);
   // Turns a still finger into a hold once it has been down long enough; `lag`
@@ -53,6 +55,8 @@ class TouchGestures {
   App& app_;
   Config cfg_;
   State state_ = State::Idle;
+  ReadingControl reading_control_ = ReadingControl::None;
+  QuickControl quick_control_ = QuickControl::None;
   int x0_ = 0, y0_ = 0;
   uint32_t t0_ = 0;
 };

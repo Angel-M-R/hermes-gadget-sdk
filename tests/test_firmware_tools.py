@@ -284,6 +284,21 @@ def test_release_notes_pin_the_plugin_to_the_release_commit(project, tmp_path):
             in notes.read_text(encoding="utf-8"))
 
 
+def test_release_notes_open_with_the_changelog_section(project, tmp_path):
+    project("breadboard", version="0.2.0")
+    changelog = tmp_path / "CHANGELOG.md"
+    changelog.write_text(
+        "# Changelog\n\n## Unreleased\n\n- Not yet.\n\n## 0.2.0\n\n### Firmware\n\n- Fixed the thing.\n\n## 0.1.0\n\n- Older.\n",
+        encoding="utf-8")
+    notes = tmp_path / "notes.md"
+    assert _package(project, "--all", "--out", str(tmp_path / "dist"), "--notes", str(notes),
+                    "--changelog", str(changelog)) == 0
+    text = notes.read_text(encoding="utf-8")
+    assert text.startswith("Hermes Gadget firmware 0.2.0.\n\n### Firmware\n\n- Fixed the thing.\n")
+    assert "Not yet" not in text and "Older" not in text
+    assert package_release.changelog_section(changelog.read_text(encoding="utf-8"), "9.9.9") == ""
+
+
 def test_release_refuses_what_it_cannot_vouch_for(project, tmp_path, capsys):
     project("one", version="0.2.0")
     project("two", version="0.3.0")
@@ -300,6 +315,20 @@ def test_release_refuses_what_it_cannot_vouch_for(project, tmp_path, capsys):
     (project.root / ".pio" / "build" / "one" / "firmware.bin").unlink()
     assert _package(project, "--board", "one", "--out", dist) == 1
     assert "run: pio run -e one" in capsys.readouterr().err
+
+
+def test_release_skips_a_nameless_copy_of_the_board_tag():
+    # Images built from main before the OTA board-tag fix (never released) hold "HGBOARD=\0" ahead of the real tag.
+    from fakes.fake_firmware import fake_image
+
+    app = bytearray(fake_image(board="amoled-1.75"))
+    app[1024:1033] = b"HGBOARD=\0"
+    assert package_release.app_identity(bytes(app)) == ("0.2.0", "amoled-1.75")
+
+    nameless = bytearray(fake_image(board=None))
+    nameless[1024:1033] = b"HGBOARD=\0"
+    with pytest.raises(package_release.PackageError, match="no board name"):
+        package_release.app_identity(bytes(nameless))
 
 
 def test_merge_refuses_overlapping_parts():

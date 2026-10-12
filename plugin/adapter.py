@@ -55,7 +55,8 @@ from gateway.platforms.base import (
 from gateway.platforms.event import MessageEvent, MessageType
 
 from . import audio as gaudio
-from . import imaging, ota, runtime, textfmt
+from . import compat, imaging, ota, runtime, textfmt
+from .battery_log import BatteryLog
 from .hub import DeviceHub, DeviceSession, HubDelegate
 from .store import DeviceStore
 
@@ -147,6 +148,7 @@ class GadgetAdapter(BasePlatformAdapter, HubDelegate):
 
     def __init__(self, config: PlatformConfig):
         super().__init__(config=config, platform=Platform(PLATFORM_NAME))
+        compat.check(adapter=self)
         extra = config.extra or {}
         self._host = str(extra.get("host") or "0.0.0.0")
         port = extra.get("port")
@@ -160,6 +162,8 @@ class GadgetAdapter(BasePlatformAdapter, HubDelegate):
         self._tts_providers = {str(k): str(v).strip().lower()
                                for k, v in (extra.get("tts_providers") or {}).items() if str(v).strip()}
         self._auto_home = _flag(extra.get("auto_home"), True)
+        self._battery_log_on = _flag(extra.get("battery_log"), False)
+        self._battery_log: Optional[BatteryLog] = None
         self._tls_cert = extra.get("tls_cert")
         self._tls_key = extra.get("tls_key")
         self._access_token = extra_or_secret(extra, "access_token", "GADGET_ACCESS_TOKEN") or None
@@ -187,6 +191,8 @@ class GadgetAdapter(BasePlatformAdapter, HubDelegate):
         from plugins.plugin_storage import plugin_data_dir
 
         self._store = DeviceStore(plugin_data_dir(PLATFORM_NAME))
+        if self._battery_log_on:
+            self._battery_log = BatteryLog(plugin_data_dir(PLATFORM_NAME) / "battery")
         try:
             ssl_ctx = self._ssl_context()
         except (OSError, ssl.SSLError) as exc:
@@ -312,28 +318,27 @@ class GadgetAdapter(BasePlatformAdapter, HubDelegate):
         staged = queue.load(session.device_id)
         if staged is None:
             return
-        data, _meta = staged
+        data, meta = staged
+        stage_id = str(meta.get("stage_id", ""))
         reported = 0.0
 
         def progress(sent: int, total: int) -> None:
             nonlocal reported
             if sent == total or time.monotonic() - reported >= 1.0:
                 reported = time.monotonic()
-                queue.report(session.device_id, state="sending", sent=sent, size=total)
+                queue.report(session.device_id, expected_id=stage_id, state="sending", sent=sent, size=total)
 
         logger.info("[%s] installing staged firmware on %s", self.name, session.device_id)
         try:
             version = await session.update_firmware(data, progress=progress)
         except ota.UpdateError as exc:
             # A device that dropped off gets the image again when it's back, a few times.
-            retry = exc.code in ota.RETRY_CODES and queue.count_attempt(session.device_id) < ota.MAX_ATTEMPTS
-            queue.report(session.device_id, state="retrying" if retry else "failed", code=exc.code, error=exc.message)
-            if not retry:
-                queue.drop(session.device_id)
+            retry = exc.code in ota.RETRY_CODES and queue.count_attempt(session.device_id, stage_id) < ota.MAX_ATTEMPTS
+            queue.complete(session.device_id, stage_id, drop=not retry,
+                           state="retrying" if retry else "failed", code=exc.code, error=exc.message)
             logger.warning("[%s] firmware update for %s failed: %s", self.name, session.device_id, exc.message)
             return
-        queue.report(session.device_id, state="done", version=version)
-        queue.drop(session.device_id)
+        queue.complete(session.device_id, stage_id, state="done", version=version)
         logger.info("[%s] %s installed firmware %s", self.name, session.device_id, version)
 
     async def _claim_home(self, session: DeviceSession) -> None:
@@ -408,6 +413,15 @@ class GadgetAdapter(BasePlatformAdapter, HubDelegate):
         await self.handle_message(self._event(
             session, f"ev-{uuid.uuid4().hex[:6]}", f"[Gadget event] {name} {payload}".strip(),
             message_type=MessageType.TEXT, allow_gateway_control=False))
+
+    async def on_state(self, session: DeviceSession, sensors: dict) -> None:
+        # Only paired devices: an unpaired one could otherwise write files at will.
+        if not self._battery_log or not session.paired:
+            return
+        try:
+            self._battery_log.record(session.device_id, sensors)
+        except OSError as exc:
+            logger.warning("[%s] could not write the battery log for %s: %s", self.name, session.device_id, exc)
 
     async def on_disconnect(self, session: DeviceSession) -> None:
         if self._hub and session.device_id not in self._hub.sessions:

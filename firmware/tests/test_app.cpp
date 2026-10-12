@@ -10,6 +10,7 @@
 #include "hg/app.hpp"
 #include "hg/crypto.hpp"
 #include "hg/protocol.hpp"
+#include "hg/qr.hpp"
 #include "hg/setup.hpp"
 #include "hg/touch.hpp"
 
@@ -48,12 +49,18 @@ struct FakeHal : hg::Display, hg::AudioIn, hg::AudioOut, hg::Transport, hg::Stor
 
   // Storage
   std::map<std::string, std::string> kv;
+  bool storage_full = false;  // every set() fails, as a worn or misconfigured flash would
   std::optional<std::string> get(std::string_view key) override {
     auto it = kv.find(std::string(key));
     if (it == kv.end()) return std::nullopt;
     return it->second;
   }
-  void set(std::string_view key, std::string_view value) override { kv[std::string(key)] = std::string(value); }
+  bool set(std::string_view key, std::string_view value) override {
+    if (storage_full) return false;
+    if (key.empty() || key.size() > 15) return false;  // NVS refuses longer keys, as the ESP32 port does
+    kv[std::string(key)] = std::string(value);
+    return true;
+  }
   void erase(std::string_view key) override { kv.erase(std::string(key)); }
 
   // Display
@@ -103,10 +110,11 @@ struct FakeHal : hg::Display, hg::AudioIn, hg::AudioOut, hg::Transport, hg::Stor
 
   // Speaker
   bool spk_open = false;
+  bool spk_drains = false;
   size_t spk_samples = 0;
   bool begin(uint32_t) override { return spk_open = true; }
   void write(const int16_t*, size_t n) override { spk_samples += n; }
-  void end() override { spk_open = false; }
+  void end() override { if (!spk_drains) spk_open = false; }
   void abort() override { spk_open = false; }
   bool busy() const override { return spk_open; }
   void set_volume(uint8_t percent) override { volume = percent; }
@@ -729,6 +737,189 @@ TEST("app: a finished reply stays readable, then the mascot returns; UP brings i
   CHECK_EQ(r.app.model().body, std::string("Here is the answer."));
 }
 
+TEST("touch: pause keeps the reply readable; page buttons move without recording") {
+  Rig r(Rig::touch_profile());
+  r.bring_online(true);
+  std::string text;
+  for (int i = 0; i < 40; ++i) text += "sentence " + std::to_string(i) + " of a long answer. ";
+  r.server(R"({"type":"turn.start","turn":"t"})");
+  r.server(R"({"type":"reply","turn":"t","text":")" + text + "\"}");
+  r.server(R"({"type":"turn.end","turn":"t","outcome":"success"})");
+  r.advance(200);
+  hg::TouchGestures touch(r.app);
+  auto tap = [&](int x) {
+    touch.update(true, x, 220, r.fake.clock);
+    touch.update(false, 0, 0, r.fake.clock);
+  };
+  tap(160);  // pause text
+  r.advance(25000);
+  CHECK(!r.app.model().hero);
+  CHECK_EQ(r.app.model().scroll, 0);
+  CHECK_EQ(r.app.model().body, text);
+  CHECK_EQ(r.fake.count("audio.start"), 0);
+  tap(280);  // next page
+  CHECK(r.app.model().scroll > 1);
+  const int page = r.app.model().scroll;
+  r.server(R"({"type":"ping","ts":1})");
+  r.advance(25000);
+  CHECK_EQ(r.app.model().scroll, page);
+  CHECK(!r.app.model().hero);
+  tap(40);  // previous page
+  CHECK_EQ(r.app.model().scroll, 0);
+  tap(160);  // resume automatic paging
+  r.advance(8100);
+  CHECK(r.app.model().scroll > 0);
+  CHECK_EQ(r.fake.count("audio.start"), 0);
+}
+
+TEST("touch: last reply opens paused without replaying audio or sending a request") {
+  Rig r(Rig::touch_profile());
+  r.bring_online(true);
+  r.server(R"({"type":"turn.start","turn":"t"})");
+  r.server(R"({"type":"reply","turn":"t","text":"Here is the answer."})");
+  r.server(R"({"type":"turn.end","turn":"t","outcome":"success"})");
+  r.advance(21000);
+  CHECK(r.app.model().hero);
+  const size_t messages = r.fake.sent.size();
+  hg::TouchGestures touch(r.app);
+  touch.update(true, 160, 220, r.fake.clock);
+  touch.update(false, 0, 0, r.fake.clock);
+  CHECK(!r.app.model().hero);
+  CHECK_EQ(r.app.model().body, std::string("Here is the answer."));
+  r.advance(25000);
+  CHECK(!r.app.model().hero);
+  CHECK_EQ(r.fake.sent.size(), messages);
+  CHECK(!r.fake.spk_open);
+}
+
+TEST("touch: reading holds do not talk in tap mode; dragging off does not change pages") {
+  Rig r(Rig::touch_profile());
+  r.fake.kv["talk_mode"] = "tap";
+  r.bring_online(true);
+  r.server(R"({"type":"reply","text":"Here is the answer."})");
+  hg::TouchGestures touch(r.app);
+  touch.update(true, 160, 220, r.fake.clock);
+  r.advance(1500);
+  touch.tick(r.fake.clock);
+  CHECK(!r.fake.mic_on);
+  touch.update(false, 0, 0, r.fake.clock);
+  CHECK(r.app.model().reading == hg::Reading::Paused);
+  touch.update(true, 160, 220, r.fake.clock);
+  touch.update(true, 280, 220, r.fake.clock + 50);
+  touch.update(false, 0, 0, r.fake.clock + 60);
+  CHECK(r.app.model().reading == hg::Reading::Paused);
+  CHECK_EQ(r.app.model().scroll, 0);
+  CHECK_EQ(r.fake.count("audio.start"), 0);
+  // The text area still starts hands-free speech with a tap.
+  touch.update(true, 160, 100, r.fake.clock);
+  touch.update(false, 0, 0, r.fake.clock);
+  CHECK(r.fake.mic_on);
+  CHECK(r.app.screen() == hg::Screen::Listening);
+  CHECK(r.app.model().reading == hg::Reading::None);
+}
+
+TEST("touch: pausing text keeps audio playing; a pending reading touch never answers a new prompt") {
+  Rig r(Rig::touch_profile());
+  r.bring_online(true);
+  r.server(R"({"type":"audio.start","stream":2,"rate":16000,"format":"pcm16"})");
+  r.server(R"({"type":"reply","text":"Here is the answer."})");
+  hg::TouchGestures touch(r.app);
+  touch.update(true, 160, 220, r.fake.clock);
+  touch.update(false, 0, 0, r.fake.clock);
+  r.advance(25000);
+  CHECK(r.fake.spk_open);
+  CHECK(r.app.model().speaking);
+  CHECK(r.app.model().reading == hg::Reading::Paused);
+  touch.update(true, 160, 220, r.fake.clock);
+  r.server(R"({"type":"prompt","id":"q1","title":"Confirm","text":"Continue?"})");
+  r.advance(1000);
+  touch.tick(r.fake.clock);
+  touch.update(false, 0, 0, r.fake.clock);
+  CHECK(r.app.screen() == hg::Screen::Prompt);
+  CHECK(r.app.model().reading == hg::Reading::None);
+  CHECK(r.fake.last("prompt.reply") == nullptr);
+  CHECK_EQ(r.fake.count("audio.start"), 0);
+}
+
+TEST("touch: cancel leaves paused text; each new reply starts with automatic pages") {
+  Rig r(Rig::touch_profile());
+  r.bring_online(true);
+  r.server(R"({"type":"reply","text":"Here is the answer."})");
+  r.server(R"({"type":"turn.end","outcome":"success"})");
+  r.advance(200);
+  hg::TouchGestures touch(r.app);
+  touch.update(true, 160, 220, r.fake.clock);
+  touch.update(false, 0, 0, r.fake.clock);
+  CHECK(r.app.model().reading == hg::Reading::Paused);
+  touch.update(true, 160, 100, r.fake.clock);
+  touch.update(true, 160, 180, r.fake.clock + 50);
+  touch.update(false, 0, 0, r.fake.clock + 60);
+  CHECK(r.app.model().hero);
+  CHECK(r.app.model().reading == hg::Reading::Recall);
+  touch.update(true, 160, 220, r.fake.clock);
+  touch.update(false, 0, 0, r.fake.clock);
+  CHECK(r.app.model().reading == hg::Reading::Paused);
+  r.app.submit_text("Next question");
+  CHECK(r.app.model().reading == hg::Reading::None);
+  r.server(R"({"type":"turn.start","turn":"next"})");
+  r.server(R"({"type":"reply.delta","turn":"next","text":"An unfinished"})");
+  CHECK(r.app.model().reading == hg::Reading::None);
+  r.server(R"({"type":"reply","turn":"next","text":"A new answer."})");
+  CHECK(r.app.model().reading == hg::Reading::Auto);
+}
+
+TEST("touch: screen timeout preserves paused text and the first touch only wakes it") {
+  Rig r(Rig::touch_profile());
+  r.fake.backlight = true;
+  r.fake.kv["screen_timeout"] = "30";
+  r.bring_online(true);
+  r.server(R"({"type":"reply","text":"Here is the answer."})");
+  r.server(R"({"type":"turn.end","outcome":"success"})");
+  r.advance(200);
+  hg::TouchGestures touch(r.app);
+  touch.update(true, 160, 220, r.fake.clock);
+  touch.update(false, 0, 0, r.fake.clock);
+  r.advance(31000);
+  CHECK(r.fake.asleep);
+  touch.update(true, 160, 220, r.fake.clock);
+  touch.update(false, 0, 0, r.fake.clock);
+  CHECK(!r.fake.asleep);
+  CHECK(r.app.model().reading == hg::Reading::Paused);
+  CHECK_EQ(r.app.model().body, std::string("Here is the answer."));
+  CHECK_EQ(r.fake.count("audio.start"), 0);
+  touch.update(true, 160, 220, r.fake.clock);
+  touch.update(false, 0, 0, r.fake.clock);
+  CHECK(r.app.model().reading == hg::Reading::Auto);
+}
+
+TEST("touch: reading controls use panel coordinates on round and rounded screens") {
+  for (bool round : {true, false}) {
+    Rig r(Rig::touch_profile());
+    if (round) r.fake.make_round(466);
+    else {
+      r.fake.width = 368;
+      r.fake.height = 448;
+      r.fake.corner_radius = 40;
+      r.fake.fb.assign(368 * 448, 0);
+    }
+    r.bring_online(true);
+    r.server(R"({"type":"reply","text":"Read this answer at your own pace."})");
+    const int x = round ? 233 : 184, y = round ? 377 : 428;
+    hg::TouchGestures touch(r.app);
+    touch.update(true, x, y, r.fake.clock);
+    touch.update(false, 0, 0, r.fake.clock);
+    CHECK(r.app.model().reading == hg::Reading::Paused);
+    CHECK_EQ(r.fake.count("audio.start"), 0);
+    CHECK(r.app.reading_control_hit(0, 0) == hg::ReadingControl::None);
+    CHECK(r.app.reading_control_hit(x, y - 50) == hg::ReadingControl::None);
+  }
+  Rig buttons;
+  buttons.bring_online(true);
+  buttons.server(R"({"type":"reply","text":"Button controls are unchanged."})");
+  CHECK(buttons.app.model().reading == hg::Reading::None);
+  CHECK(buttons.app.reading_control_hit(160, 220) == hg::ReadingControl::None);
+}
+
 TEST("app: hero animation redraws only a slice of the screen") {
   Rig r;
   r.bring_online(true);
@@ -1082,6 +1273,199 @@ TEST("settings: physical chord opens locally and saves volume, brightness and ta
   CHECK_EQ(reboot.app.device_id(), r.app.device_id());
 }
 
+TEST("voice: the selected silence interval keeps a natural pause inside the same recording") {
+  Rig r;
+  r.fake.kv["talk_mode"] = "tap";
+  r.fake.kv["end_silence_ms"] = "1500";
+  r.bring_online(true);
+  r.app.console("talk");
+  r.app.console("release");
+  std::vector<int16_t> speech(320, 4000), quiet(320, 0);
+  for (int i = 0; i < 20; ++i) { r.app.on_mic_samples(speech.data(), speech.size()); r.advance(20); }
+  for (int i = 0; i < 50; ++i) { r.app.on_mic_samples(quiet.data(), quiet.size()); r.advance(20); }
+  CHECK(r.fake.mic_on);
+  CHECK(r.fake.last("audio.end") == nullptr);
+  for (int i = 0; i < 30; ++i) { r.app.on_mic_samples(quiet.data(), quiet.size()); r.advance(20); }
+  CHECK(!r.fake.mic_on);
+  CHECK(r.fake.last("audio.end") != nullptr);
+  CHECK_EQ(r.fake.count("audio.start"), 1);
+}
+
+TEST("voice: recording cues drain locally before microphone samples leave the device") {
+  Rig r;
+  r.fake.kv["recording_cues"] = "1";
+  r.fake.spk_drains = true;
+  r.bring_online(true);
+  r.app.console("talk");
+  CHECK(r.fake.spk_samples > 0);
+  std::vector<int16_t> speech(320, 4000);
+  r.app.on_mic_samples(speech.data(), speech.size());
+  CHECK(r.fake.sent_binary.empty());
+  r.advance(100);
+  r.app.on_mic_samples(speech.data(), speech.size());
+  CHECK(r.fake.sent_binary.empty());
+  r.fake.spk_open = false;  // physical audio driver reports the tone has drained
+  r.advance(10);
+  r.app.on_mic_samples(speech.data(), speech.size());
+  CHECK_EQ(r.fake.sent_binary.size(), size_t(1));
+  r.advance(400);
+  const size_t start_tone = r.fake.spk_samples;
+  r.app.console("release");
+  CHECK(!r.fake.mic_on);
+  CHECK(r.fake.last("audio.end") != nullptr);
+  CHECK(r.fake.spk_samples > start_tone);  // end tone is local too
+  r.app.console("set mute 1");
+  const size_t before = r.fake.spk_samples;
+  r.app.console("talk");
+  r.advance(400);
+  r.app.console("release");
+  CHECK_EQ(r.fake.spk_samples, before);
+}
+
+TEST("settings: voice, text and language settings persist and reject invalid input") {
+  Rig r;
+  r.app.begin();
+  for (const char* line : {"set end_silence_ms 2400", "set recording_cues 1", "set text_size large", "set language es"})
+    CHECK(r.app.console(line).rfind("@ok", 0) == 0);
+  const auto saved = r.fake.kv;
+  for (const char* line : {"set end_silence_ms -1", "set end_silence_ms 10ms", "set end_silence_ms 3001",
+                          "set recording_cues yes", "set text_size huge", "set language xx"})
+    CHECK(r.app.console(line).rfind("@error", 0) == 0);
+  CHECK_EQ(r.fake.kv, saved);
+  Rig reboot;
+  reboot.fake.kv = saved;
+  reboot.app.begin();
+  CHECK(reboot.app.model().language == hg::Language::Spanish);
+  CHECK(reboot.app.model().large_text);
+  CHECK(reboot.app.open_settings());
+  CHECK_EQ(reboot.app.model().headline, std::string("Ajustes"));
+  CHECK_EQ(reboot.app.model().detail, std::string("Volumen del altavoz"));
+  reboot.app.close_settings();
+  reboot.app.console("set language en");
+  CHECK(reboot.app.open_settings());
+  CHECK_EQ(reboot.app.model().headline, std::string("Settings"));
+}
+
+TEST("voice: a stalled or cancelled start cue cannot block recording") {
+  Rig r;
+  r.fake.kv["recording_cues"] = "1";
+  r.fake.spk_drains = true;
+  r.bring_online(true);
+  r.app.console("talk");
+  r.advance(500);
+  CHECK(!r.fake.spk_open);
+  const int16_t speech[] = {4000, -4000};
+  r.app.on_mic_samples(speech, 2);
+  CHECK_EQ(r.fake.sent_binary.size(), size_t(1));
+  r.app.console("cancel");
+  r.app.console("release");
+  r.app.console("talk");
+  CHECK(r.fake.spk_open);
+  r.app.console("cancel");
+  CHECK(!r.fake.spk_open);
+  CHECK(!r.fake.mic_on);
+  CHECK_EQ(r.fake.count("audio.end"), 0);
+}
+
+TEST("touch: quick controls change volume and text while preserving the spoken reply") {
+  Rig r(Rig::touch_profile());
+  r.bring_online(true);
+  r.server(R"({"type":"audio.start","stream":2,"rate":16000,"format":"pcm16"})");
+  const std::string answer = "Una canción para el niño y el pingüino. ¿Quieres oír más?";
+  r.server(R"({"type":"reply","text":")" + answer + "\"}");
+  hg::TouchGestures touch(r.app);
+  auto tap = [&](int x, int y) {
+    touch.update(true, x, y, r.fake.clock);
+    touch.update(false, 0, 0, r.fake.clock);
+  };
+  tap(100, 4);  // title opens controls without stopping playback
+  CHECK(r.app.quick_controls_open());
+  CHECK(r.fake.spk_open);
+  CHECK(r.fake.last("cancel") == nullptr);
+  tap(260, 95);  // volume up
+  CHECK_EQ(r.fake.volume, 80);
+  CHECK_EQ(r.fake.kv["volume"], std::string("80"));
+  tap(230, 165);  // large text
+  CHECK(r.app.model().large_text);
+  CHECK_EQ(r.fake.kv["text_size"], std::string("large"));
+  tap(160, 220);  // done
+  CHECK(!r.app.quick_controls_open());
+  CHECK(r.fake.spk_open);
+  CHECK_EQ(r.app.model().body, answer);
+  CHECK_EQ(r.fake.count("audio.start"), 0);
+  r.app.on_button(hg::Button::Cancel, true);
+  CHECK(r.app.open_quick_controls());
+  r.advance(2200);
+  CHECK(r.app.quick_controls_open());
+  CHECK_EQ(r.fake.count("session.new"), 0);
+  touch.update(true, 230, 165, r.fake.clock);
+  r.server(R"({"type":"prompt","id":"q","title":"Confirm","text":"Continue?"})");
+  touch.update(false, 0, 0, r.fake.clock);  // an old touch must not answer the new prompt
+  CHECK(!r.app.quick_controls_open());
+  CHECK(r.app.screen() == hg::Screen::Prompt);
+  CHECK_EQ(r.fake.count("prompt.reply"), 0);
+}
+
+TEST("touch: text controls work without a speaker and never start a recording") {
+  Rig r(Rig::touch_profile());
+  r.hal.speaker = nullptr;
+  r.bring_online(true);
+  CHECK(r.app.open_quick_controls());
+  CHECK(r.app.quick_control_hit(160, 95) == hg::QuickControl::None);
+  hg::TouchGestures touch(r.app);
+  touch.update(true, 160, 95, r.fake.clock);
+  r.advance(1200);
+  touch.tick(r.fake.clock);
+  touch.update(false, 0, 0, r.fake.clock);
+  CHECK(!r.fake.mic_on);
+  CHECK_EQ(r.fake.count("audio.start"), 0);
+  touch.update(true, 230, 165, r.fake.clock);
+  touch.update(false, 0, 0, r.fake.clock);
+  CHECK(r.app.model().large_text);
+  r.app.console("cancel");
+  CHECK(!r.app.quick_controls_open());
+  CHECK_EQ(r.fake.count("cancel"), 0);
+}
+
+TEST("ui: round quick controls use panel coordinates and preserve hit areas at large text") {
+  FakeHal display;
+  display.make_round(466);
+  hg::Ui ui(display, true);
+  hg::UiModel m;
+  m.screen = hg::Screen::Controls;
+  m.speaker_button = true;
+  m.language = hg::Language::Spanish;
+  ui.render(m);
+  CHECK(ui.control_hit(m, 125, 200) == hg::QuickControl::VolumeDown);
+  CHECK(ui.control_hit(m, 233, 200) == hg::QuickControl::Mute);
+  CHECK(ui.control_hit(m, 340, 200) == hg::QuickControl::VolumeUp);
+  CHECK(ui.control_hit(m, 150, 300) == hg::QuickControl::TextNormal);
+  CHECK(ui.control_hit(m, 310, 300) == hg::QuickControl::TextLarge);
+  ui.set_large_text(true);
+  CHECK(ui.control_hit(m, 310, 300) == hg::QuickControl::TextLarge);
+  CHECK(ui.control_hit(m, 233, 377) == hg::QuickControl::Close);
+  CHECK(ui.control_hit(m, 20, 300) == hg::QuickControl::None);
+}
+
+TEST("ui: larger text wraps fewer characters while keeping header and touch controls fixed") {
+  FakeHal display;
+  hg::Ui ui(display, true);
+  const auto normal = ui.layout();
+  ui.set_large_text(true);
+  CHECK(ui.layout().body_cols < normal.body_cols);
+  CHECK(ui.layout().body_rows < normal.body_rows);
+  CHECK_EQ(ui.layout().scale, normal.scale);
+  CHECK_EQ(ui.layout().header_h, normal.header_h);
+  CHECK_EQ(ui.layout().bottom_h, normal.bottom_h);
+  hg::UiModel m;
+  m.screen = hg::Screen::Ready;
+  m.body = "El niño canta una canción. ";
+  m.reading = hg::Reading::Paused;
+  m.language = hg::Language::Spanish;
+  ui.render(m);
+  CHECK(ui.reading_hit(m, 160, 220) == hg::ReadingControl::TogglePause);
+}
+
 TEST("settings: hardware checks are local and prompts release the microphone") {
   Rig r;
   r.bring_online(true);
@@ -1147,7 +1531,7 @@ TEST("settings: title hold and menu swipe work without starting a recording") {
   CHECK(r.app.screen() == hg::Screen::Ready);
 }
 
-TEST("touch: holding the speaker button mutes and unmutes; a tap only says how") {
+TEST("touch: holding the speaker button mutes and unmutes; a tap opens quick controls") {
   Rig r(Rig::touch_profile());
   r.bring_online(true);
   CHECK(r.app.model().speaker_button);
@@ -1164,7 +1548,9 @@ TEST("touch: holding the speaker button mutes and unmutes; a tap only says how")
   touch.update(false, 0, 0, r.fake.clock);
   CHECK(!r.app.muted());
   CHECK(!r.app.model().speaker_pressed);
-  CHECK_EQ(r.app.model().hint, std::string("Hold the speaker to mute"));
+  CHECK(r.app.screen() == hg::Screen::Controls);
+  CHECK(r.app.quick_controls_open());
+  r.app.close_quick_controls();
 
   touch.update(true, 34, 50, r.fake.clock);
   r.advance(450);
@@ -1231,7 +1617,9 @@ TEST("touch: the speaker button stays pressed through a hold, and a swipe from i
   touch.tick(r.fake.clock);
   touch.update(false, 0, 0, r.fake.clock);
   CHECK(r.app.muted());
-  CHECK_EQ(r.app.model().hint, std::string("Hold the speaker to unmute"));
+  CHECK(r.app.screen() == hg::Screen::Controls);
+  CHECK(r.app.muted());
+  r.app.close_quick_controls();
 
   // Swiping down from the button is the cancel swipe, as anywhere else.
   r.app.submit_text("What's the weather?");
@@ -1318,9 +1706,10 @@ TEST("ui: the top bar shows the battery charge, or USB with no battery") {
   Rig r;
   r.hal.power = &supply;
   r.bring_online(true);
+  r.app.console("set battery_display both");
   r.advance(200);
   CHECK_EQ(int(r.app.model().battery), 64);
-  CHECK(r.app.model().charging);
+  CHECK(r.app.model().battery_charging);
   CHECK(!r.app.model().usb_power);
   const std::vector<uint16_t> charging(r.fake.fb.begin(), r.fake.fb.begin() + 320 * 22);
   supply.status = hg::PowerStatus{false, std::nullopt, std::nullopt, false, true};
@@ -1395,6 +1784,127 @@ TEST("ui: an emissive panel keeps everything around the face pure black") {
   size_t lit = 0;
   for (uint16_t px : r.fake.fb) lit += px != 0;
   CHECK(lit > 2000);  // the face and the text are still drawn
+}
+
+// The settings target of a round panel: where the UI square sits, and the hold target inside it.
+struct RoundTarget {
+  int diameter, left, top, width, height;
+};
+constexpr RoundTarget kRound360{360, 120, 53, 120, 36};
+constexpr RoundTarget kRound466{466, 112, 68, 240, 36};
+
+static void check_round_target_gestures(const RoundTarget& t) {
+  Rig r(Rig::touch_profile());
+  r.fake.make_round(t.diameter);
+  r.bring_online(true);
+  const int right = t.left + t.width - 1, bottom = t.top + t.height - 1, cx = t.left + t.width / 2;
+  CHECK(r.app.settings_title_hit(t.left, t.top));
+  CHECK(r.app.settings_title_hit(right, bottom));
+  CHECK(!r.app.settings_title_hit(t.left - 1, t.top + 1));
+  CHECK(!r.app.settings_title_hit(right + 1, t.top + 1));
+  CHECK(!r.app.settings_title_hit(cx, t.top - 1));
+  CHECK(!r.app.settings_title_hit(cx, bottom + 1));
+  hg::TouchGestures touch(r.app);
+  // Holding the target opens settings without ever starting the microphone.
+  touch.update(true, cx, t.top + 10, r.fake.clock);
+  r.advance(200);
+  touch.tick(r.fake.clock);
+  CHECK(!r.fake.mic_on);
+  r.advance(900);
+  touch.tick(r.fake.clock);
+  touch.update(false, 0, 0, r.fake.clock);
+  CHECK(r.app.settings_open());
+  CHECK(!r.fake.mic_on);
+  // And closes it again.
+  touch.update(true, cx, t.top + 10, r.fake.clock);
+  r.advance(1100);
+  touch.tick(r.fake.clock);
+  touch.update(false, 0, 0, r.fake.clock);
+  CHECK(!r.app.settings_open());
+  // Just outside the target is still hold-to-talk.
+  touch.update(true, right + 1, t.top + 10, r.fake.clock);
+  r.advance(200);
+  touch.tick(r.fake.clock);
+  CHECK(r.fake.mic_on);
+  r.app.console("cancel");
+  touch.update(false, 0, 0, r.fake.clock);
+  CHECK(!r.app.settings_open());
+}
+
+static void check_round_header_label(const RoundTarget& t) {
+  FakeHal display;
+  display.make_round(t.diameter);
+  hg::Ui ui(display);
+  hg::UiModel m;
+  m.screen = hg::Screen::Ready;
+  m.link = hg::Link::Online;
+  ui.render(m);
+  const auto top = [&]() {
+    return std::vector<uint16_t>(display.fb.begin() + t.top * t.diameter,
+                                 display.fb.begin() + (t.top + t.height) * t.diameter);
+  };
+  const auto ready = top();
+  m.screen = hg::Screen::Settings;
+  ui.render(m);
+  CHECK(top() != ready);
+  m.screen = hg::Screen::Ready;
+  ui.render(m);
+  CHECK(top() == ready);
+}
+
+TEST("settings: round 360 target holds without recording and leaves TALK outside it") {
+  check_round_target_gestures(kRound360);
+}
+
+TEST("settings: round 466 target holds without recording and leaves TALK outside it") {
+  check_round_target_gestures(kRound466);
+}
+
+TEST("settings: round header redraws its return label and restores settings label") {
+  check_round_header_label(kRound360);
+  check_round_header_label(kRound466);
+}
+
+TEST("settings: round target is drawn only while the hold works") {
+  Rig r(Rig::touch_profile());
+  r.fake.make_round(466);
+  r.bring_online(true);
+  const auto band = [&] {
+    return std::vector<uint16_t>(r.fake.fb.begin() + kRound466.top * 466,
+                                 r.fake.fb.begin() + (kRound466.top + kRound466.height) * 466);
+  };
+  const auto shown = band();
+  r.server(R"({"type":"turn.start","turn":"t"})");
+  r.server(R"({"type":"prompt","id":"q1","text":"Continue?"})");
+  CHECK(r.app.screen() == hg::Screen::Prompt);
+  CHECK(band() != shown);  // the label is hidden while a hold would do nothing
+  r.advance(700);
+  r.app.on_button(hg::Button::Talk, true);
+  r.app.on_button(hg::Button::Talk, false);
+  CHECK(r.app.screen() == hg::Screen::Thinking);
+  CHECK(band() == shown);
+}
+
+TEST("settings: rectangular boards keep the full-width title strip and their header") {
+  Rig r(Rig::touch_profile());  // 320x240: scale 2, so the strip is 22 px tall
+  r.bring_online(true);
+  CHECK(r.app.settings_title_hit(0, 0));
+  CHECK(r.app.settings_title_hit(319, 21));
+  CHECK(!r.app.settings_title_hit(319, 22));
+  CHECK(!r.app.settings_title_hit(160, 22));
+  FakeHal display;
+  hg::Ui ui(display);
+  hg::UiModel m;
+  m.screen = hg::Screen::Ready;
+  m.link = hg::Link::Online;
+  ui.render(m);
+  const auto top = [&]() {
+    return std::vector<uint16_t>(display.fb.begin(), display.fb.begin() + 22 * 320);
+  };
+  const auto ready = top();
+  m.screen = hg::Screen::Settings;
+  ui.render(m);
+  CHECK(top() == ready);  // no BACK TO HERMES label on a rectangular header
 }
 
 TEST("power: idle screen dims, sleeps and consumes the wake input without recording") {
@@ -1476,6 +1986,165 @@ TEST("power: a dark screen sleeps the panel, which wakes before its backlight re
   CHECK_EQ(r.fake.sleep_changes, 6);
 }
 
+namespace {
+// A PMIC whose power key the board can only see as short presses.
+struct KeyPower : hg::Power {
+  int presses = 0;
+  std::optional<hg::PowerStatus> read() override { return hg::PowerStatus{true, 3900, 70, false, false}; }
+  bool power_off() override { return true; }
+  bool take_key_press() override {
+    if (!presses) return false;
+    --presses;
+    return true;
+  }
+};
+}  // namespace
+
+TEST("power: the power key turns the screen off and back on, without a screen timeout") {
+  KeyPower key;
+  Rig r;
+  r.fake.backlight = true;
+  r.hal.power = &key;
+  r.bring_online(true);
+  CHECK_EQ(r.fake.brightness, 100);
+  key.presses = 1;
+  r.advance(100);
+  CHECK_EQ(r.fake.brightness, 0);
+  for (int i = 0; i < 4; ++i) {  // a minute with the server alive
+    r.server(R"({"type":"ping"})");
+    r.advance(15000);
+  }
+  CHECK_EQ(r.fake.brightness, 0);  // stays off: no timeout brings it back
+  key.presses = 1;
+  r.advance(100);
+  CHECK_EQ(r.fake.brightness, 100);
+  for (int i = 0; i < 4; ++i) {
+    r.server(R"({"type":"ping"})");
+    r.advance(15000);
+  }
+  CHECK_EQ(r.fake.brightness, 100);  // and stays on
+}
+
+TEST("power: other input wakes a screen the power key turned off, and only wakes it") {
+  KeyPower key;
+  Rig r;
+  r.fake.backlight = true;
+  r.hal.power = &key;
+  r.bring_online(true);
+  key.presses = 1;
+  r.advance(100);
+  CHECK_EQ(r.fake.brightness, 0);
+  r.app.on_button(hg::Button::Talk, true);
+  CHECK_EQ(r.fake.brightness, 100);
+  CHECK(!r.fake.mic_on);
+  r.app.on_button(hg::Button::Talk, false);
+  CHECK(r.fake.last("audio.start") == nullptr);
+}
+
+TEST("power: a prompt turns a screen the power key turned off back on") {
+  KeyPower key;
+  Rig r;
+  r.fake.backlight = true;
+  r.hal.power = &key;
+  r.bring_online(true);
+  key.presses = 1;
+  r.advance(100);
+  CHECK_EQ(r.fake.brightness, 0);
+  r.server(R"({"type":"prompt","id":"wake","text":"Continue?"})");
+  CHECK_EQ(r.fake.brightness, 100);
+  CHECK(r.app.screen() == hg::Screen::Prompt);
+}
+
+TEST("power: a dark screen stays dark while the connection drops and comes back") {
+  KeyPower key;
+  Rig r;
+  r.fake.backlight = true;
+  r.hal.power = &key;
+  r.bring_online(true);
+  key.presses = 1;
+  r.advance(100);
+  CHECK_EQ(r.fake.brightness, 0);
+  r.app.on_transport_closed("gone");
+  r.advance(5000);
+  CHECK_EQ(r.fake.brightness, 0);  // reconnecting in the dark (a commute must not light it)
+  r.app.on_network(false, "Wi-Fi lost");
+  r.app.on_network(true, "192.168.1.146");
+  r.advance(5000);
+  CHECK_EQ(r.fake.brightness, 0);
+  r.app.on_button(hg::Button::Talk, true);  // the user still wakes it
+  CHECK_EQ(r.fake.brightness, 100);
+  r.app.on_button(hg::Button::Talk, false);
+}
+
+TEST("power: a lit screen stays lit while reconnecting, as before") {
+  Rig r;
+  r.fake.backlight = true;
+  r.bring_online(true);
+  CHECK_EQ(r.app.console("set screen_timeout 30"), std::string("@ok screen_timeout"));
+  r.app.on_transport_closed("gone");
+  r.advance(60000);  // reconnect attempts fail: still not settled
+  CHECK_EQ(r.fake.brightness, 100);
+}
+
+TEST("power: the power key brings a dimmed screen back to full brightness") {
+  KeyPower key;
+  Rig r;
+  r.fake.backlight = true;
+  r.hal.power = &key;
+  r.bring_online(true);
+  CHECK_EQ(r.app.console("set screen_timeout 30"), std::string("@ok screen_timeout"));
+  r.advance(15000);
+  CHECK_EQ(r.fake.brightness, 10);
+  key.presses = 1;
+  r.advance(100);
+  CHECK_EQ(r.fake.brightness, 100);
+}
+
+TEST("power: an idle settings menu sleeps on every view; the wake input restores it where it was") {
+  Rig r;
+  r.fake.backlight = true;
+  r.bring_online(true);
+  CHECK_EQ(r.app.console("set screen_timeout 30"), std::string("@ok screen_timeout"));
+  CHECK(r.app.open_settings());
+  CHECK_EQ(r.app.model().detail, std::string("Speaker volume"));
+  r.advance(15000);
+  CHECK_EQ(r.fake.brightness, 10);  // dims halfway, menu still open
+  r.advance(15000);
+  CHECK_EQ(r.fake.brightness, 0);   // and goes dark: no settings view holds the display awake
+  CHECK(r.app.settings_open());
+  // The first input only wakes; the menu is still open, on the same item.
+  r.app.on_button(hg::Button::Talk, true);
+  CHECK_EQ(r.fake.brightness, 100);
+  CHECK(r.app.settings_open());
+  CHECK_EQ(r.app.model().detail, std::string("Speaker volume"));
+  r.app.on_button(hg::Button::Talk, false);
+  CHECK(r.fake.last("audio.start") == nullptr);
+  // A running hardware check sleeps too: the meter pauses while dark and the
+  // wake input brings the same check back.
+  for (int i = 0; i < 3; ++i) r.app.console("cancel");
+  CHECK_EQ(r.app.model().detail, std::string("Microphone check"));
+  r.app.console("talk");
+  r.app.console("release");
+  CHECK(r.fake.mic_on);
+  r.advance(15000);
+  CHECK_EQ(r.fake.brightness, 10);
+  r.advance(15000);
+  CHECK_EQ(r.fake.brightness, 0);   // sleeps even with the meter running
+  CHECK(r.fake.mic_on);             // the check itself keeps running
+  r.app.on_button(hg::Button::Talk, true);
+  CHECK_EQ(r.fake.brightness, 100);
+  CHECK_EQ(r.app.model().detail, std::string("Microphone check"));  // same check restored
+  r.app.on_button(hg::Button::Talk, false);
+  r.app.console("cancel");
+  // Wi-Fi setup is not the settings menu: the user is copying instructions.
+  r.app.console("settings close");
+  CHECK(!r.app.settings_open());
+  r.app.on_wifi_setup = [] { return "Temporary setup network"; };
+  CHECK(r.app.start_wifi_setup());
+  r.advance(30000);
+  CHECK_EQ(r.fake.brightness, 100);
+}
+
 TEST("power: failed readings replace stale data and shutdown requires a second local selection") {
   struct Battery : hg::Power {
     bool failed = false;
@@ -1507,6 +2176,200 @@ TEST("power: failed readings replace stale data and shutdown requires a second l
   CHECK_EQ(battery.shutdowns, 0);
   r.app.console("talk"); r.app.console("release");
   CHECK_EQ(battery.shutdowns, 1);
+}
+
+TEST("battery indicator: the top band shows the level, colours charging and low, and hides without a reading") {
+  for (bool round : {false, true}) {
+    FakeHal display;
+    if (round) display.make_round(466);
+    hg::Ui ui(display);
+    const int w = display.width;
+    const int y0 = 0, y1 = round ? 68 : 22;  // round: the panel above the UI square; else the top bar
+    const auto top = [&] {
+      return std::vector<uint16_t>(display.fb.begin() + y0 * w, display.fb.begin() + y1 * w);
+    };
+    const auto count = [&](uint16_t color) {
+      int n = 0;
+      for (uint16_t px : top()) n += px == color;
+      return n;
+    };
+    hg::UiModel m;
+    m.screen = hg::Screen::Ready;
+    m.link = hg::Link::Network;  // a yellow dot, so red and green below come from the battery
+    ui.render(m);
+    const auto none = top();
+    const uint16_t red = hg::rgb565(242, 95, 92), green = hg::rgb565(61, 214, 140);
+    m.battery = 65;
+    ui.render(m);
+    CHECK(top() != none);
+    CHECK_EQ(count(red), 0);
+    CHECK_EQ(count(green), 0);
+    m.battery = 8;
+    m.battery_low = true;
+    ui.render(m);
+    CHECK(count(red) > 0);  // low: red fill and text
+    CHECK_EQ(count(green), 0);
+    m.battery_charging = true;
+    ui.render(m);
+    CHECK(count(green) > 0);  // charging: green fill, and the text is no longer red
+    CHECK_EQ(count(red), 0);
+    // Percentage only: no icon, so charging turns the text green instead.
+    m.battery_icon = false;
+    ui.render(m);
+    CHECK(count(green) > 0);
+    const auto text_only = top();
+    m.battery_icon = true;
+    m.battery_text = false;
+    ui.render(m);
+    CHECK(top() != text_only);
+    CHECK(count(green) > 0);  // icon only: the fill
+    m.battery_text = true;
+    m.battery = -1;
+    m.battery_low = m.battery_charging = false;
+    ui.render(m);
+    CHECK(top() == none);
+    if (round) {
+      // Centred near the top edge, every lit pixel inside the circle.
+      m.battery = 100;
+      ui.render(m);
+      int min_x = w, max_x = 0, min_y = y1;
+      for (int y = 0; y < y1; ++y)
+        for (int x = 0; x < w; ++x)
+          if (display.fb[static_cast<size_t>(y * w + x)] != none[static_cast<size_t>(y * w + x)]) {
+            min_x = std::min(min_x, x); max_x = std::max(max_x, x); min_y = std::min(min_y, y);
+            const int dx = 2 * x + 1 - w, dy = 2 * y + 1 - w;
+            CHECK(dx * dx + dy * dy < w * w);
+          }
+      CHECK(std::abs((min_x + max_x) / 2 - w / 2) <= 2);
+      CHECK(min_y < 20);
+    }
+  }
+}
+
+TEST("display: an emissive panel leaves its background unlit; a backlit one keeps near black") {
+  for (bool emissive : {false, true}) {
+    FakeHal display;
+    display.make_round(466);
+    display.emissive = emissive;
+    hg::Ui ui(display);
+    hg::UiModel m;
+    m.screen = hg::Screen::Ready;
+    m.hero = true;
+    ui.render(m);
+    const uint16_t corner = display.fb[0], centre_edge = display.fb[static_cast<size_t>(233 * 466 + 120)];
+    CHECK_EQ(corner == 0, emissive);  // outside the UI square
+    CHECK_EQ(centre_edge == 0, emissive);  // inside it, beside the mascot
+  }
+}
+
+TEST("battery indicator: off by default, follows readings once chosen, and each select picks the next style") {
+  struct Battery : hg::Power {
+    hg::PowerStatus status{true, 3850, 65, false, false};
+    std::optional<hg::PowerStatus> read() override { return status; }
+    bool power_off() override { return true; }
+  } battery;
+  Rig r;
+  r.hal.power = &battery;
+  r.bring_online(true);
+  CHECK_EQ(int(r.app.model().battery), -1);  // off until the user picks a style
+  CHECK(r.fake.kv.find("battery_display") == r.fake.kv.end());
+  CHECK_EQ(r.app.console("set battery_display both"), std::string("@ok battery_display"));
+  CHECK_EQ(int(r.app.model().battery), 65);
+  CHECK(r.app.model().battery_icon && r.app.model().battery_text);
+  CHECK(!r.app.model().battery_low);
+  battery.status = hg::PowerStatus{true, 3400, 7, false, false};
+  r.advance(5000);
+  CHECK_EQ(int(r.app.model().battery), 7);
+  CHECK(r.app.model().battery_low);
+  battery.status = hg::PowerStatus{true, 3400, 7, true, true};  // on USB and charging: no longer low
+  r.advance(5000);
+  CHECK(r.app.model().battery_charging);
+  CHECK(!r.app.model().battery_low);
+  battery.status = hg::PowerStatus{false, std::nullopt, 0, false, true};  // no battery fitted
+  r.advance(5000);
+  CHECK_EQ(int(r.app.model().battery), -1);
+  battery.status = hg::PowerStatus{true, 3850, 65, false, false};
+  r.advance(5000);
+  CHECK_EQ(int(r.app.model().battery), 65);
+  CHECK_EQ(r.app.console("set battery_display maybe"),
+           std::string("@error battery_display must be icon, percentage, both or off"));
+  CHECK_EQ(r.app.console("set battery_display off"), std::string("@ok battery_display"));
+  CHECK_EQ(r.fake.kv["battery_display"], std::string("off"));
+  CHECK_EQ(int(r.app.model().battery), -1);
+  // Each select on the battery page moves to the next style, saves it, and stays on the page.
+  r.app.open_settings();
+  for (int i = 0; i < 8; ++i) r.app.console("cancel");
+  CHECK_EQ(r.app.model().detail, std::string("Battery and power"));
+  CHECK(r.app.model().body.find("Indicator: Off\nTALK to change") != std::string::npos);  // a button board
+  struct Step { const char* saved; const char* shown; bool icon, text; };
+  for (const Step& step : {Step{"icon", "Icon", true, false}, Step{"percentage", "Percent", false, true},
+                           Step{"both", "Both", true, true}, Step{"off", "Off", true, true},
+                           Step{"icon", "Icon", true, false}}) {
+    r.app.console("talk"); r.app.console("release");
+    CHECK_EQ(r.fake.kv["battery_display"], std::string(step.saved));
+    CHECK(r.app.model().body.find(std::string("Indicator: ") + step.shown + "\n") != std::string::npos);
+    CHECK_EQ(r.app.model().detail, std::string("Battery and power"));
+    CHECK_EQ(int(r.app.model().battery), std::string(step.saved) == "off" ? -1 : 65);
+    CHECK_EQ(r.app.model().battery_icon, step.icon);
+    CHECK_EQ(r.app.model().battery_text, step.text);
+  }
+  r.app.console("settings close");
+  r.app.console("set battery_display both");
+  CHECK_EQ(int(r.app.model().battery), 65);
+}
+
+TEST("battery indicator: the battery page offers it only when a percentage can appear") {
+  struct Battery : hg::Power {
+    std::optional<hg::PowerStatus> status;
+    std::optional<hg::PowerStatus> read() override { return status; }
+    bool power_off() override { return true; }
+  } battery;
+  Rig r;
+  r.hal.power = &battery;
+  r.bring_online(true);
+  r.app.open_settings();
+  for (int i = 0; i < 8; ++i) r.app.console("cancel");
+  CHECK_EQ(r.app.model().detail, std::string("Battery and power"));
+  for (const auto& reading : {std::optional<hg::PowerStatus>{},                                      // no readings
+                              std::optional<hg::PowerStatus>{hg::PowerStatus{false, std::nullopt, 0, false, true}},  // no battery
+                              std::optional<hg::PowerStatus>{hg::PowerStatus{true, 3850, std::nullopt, false, false}}}) {  // no percentage
+    battery.status = reading;
+    r.advance(5000);
+    CHECK(r.app.model().body.find("Indicator") == std::string::npos);
+    r.app.console("talk"); r.app.console("release");
+    CHECK(r.fake.kv.find("battery_display") == r.fake.kv.end());  // a select changes nothing
+    CHECK_EQ(r.app.model().detail, std::string("Battery and power"));
+  }
+  battery.status = hg::PowerStatus{true, 3850, 65, false, false};
+  r.advance(5000);
+  CHECK(r.app.model().body.find("Indicator: Off") != std::string::npos);
+  r.app.console("talk"); r.app.console("release");
+  CHECK_EQ(r.fake.kv["battery_display"], std::string("icon"));
+}
+
+TEST("battery indicator: touch screens say tap") {
+  struct Battery : hg::Power {
+    std::optional<hg::PowerStatus> read() override { return hg::PowerStatus{true, 3850, 65, false, false}; }
+    bool power_off() override { return true; }
+  } battery;
+  Rig r(Rig::touch_profile());
+  r.hal.power = &battery;
+  r.bring_online(true);
+  r.app.open_settings();
+  for (int i = 0; i < 8; ++i) r.app.console("cancel");
+  CHECK_EQ(r.app.model().detail, std::string("Battery and power"));
+  CHECK(r.app.model().body.find("Indicator: Off\nTap to change") != std::string::npos);
+}
+
+TEST("battery indicator: boards without a power driver have no battery page") {
+  Rig r;
+  r.bring_online(true);
+  r.app.open_settings();
+  for (int i = 0; i < 20; ++i) {
+    CHECK(r.app.model().detail != "Battery and power");
+    r.app.console("cancel");
+  }
+  CHECK_EQ(int(r.app.model().battery), -1);
 }
 
 TEST("power: a peripheral rail cannot be selected as device power-off") {
@@ -1568,14 +2431,16 @@ TEST("Wi-Fi setup: private instructions stay out of diagnostics and prompts clos
   r.bring_online(true);
   int closed = 0;
   r.app.on_wifi_setup = [] {
-    return hg::App::WifiSetup{"Network: Hermes-test\nPassword: private-setup-key",
-                              hg::wifi_join_code("Hermes-test", "private-setup-key")};
+    return "Network: Hermes-test\nPassword: private-setup-key";
   };
+  r.app.on_wifi_setup_ap = [] { return hg::WifiSetupAp{"Hermes-test", "private-setup-key"}; };
   r.app.on_wifi_setup_close = [&] { ++closed; };
   CHECK(r.app.start_wifi_setup());
   CHECK(r.app.screen() == hg::Screen::Setup);
   CHECK(r.app.model().body.find("private-setup-key") != std::string::npos);
-  CHECK_EQ(r.app.model().qr, std::string("WIFI:T:WPA;S:Hermes-test;P:private-setup-key;;"));
+  const hg::qr::Code expected = hg::qr::encode("WIFI:T:WPA;S:Hermes-test;P:private-setup-key;;");
+  CHECK(r.app.model().qr != nullptr);
+  if (r.app.model().qr) CHECK(r.app.model().qr->modules == expected.modules);
   CHECK(r.app.console("diag").find("private-setup-key") == std::string::npos);
   CHECK(r.app.status_json().find("private-setup-key") == std::string::npos);
   r.app.console("talk"); r.app.console("release");
@@ -1587,7 +2452,7 @@ TEST("Wi-Fi setup: private instructions stay out of diagnostics and prompts clos
   touch.update(false, 0, 0, r.fake.clock + 40);
   CHECK_EQ(closed, 1);
   CHECK(!r.app.wifi_setup_open());
-  CHECK(r.app.model().qr.empty());
+  CHECK(r.app.model().qr == nullptr);
   CHECK(r.app.start_wifi_setup());
   r.server(R"({"type":"prompt","id":"setup-test","text":"Continue?"})");
   CHECK_EQ(closed, 2);
@@ -1596,73 +2461,173 @@ TEST("Wi-Fi setup: private instructions stay out of diagnostics and prompts clos
   CHECK(!r.app.start_wifi_setup());
 }
 
-TEST("Wi-Fi setup: every screen shape shows a join code that reads back module for module") {
-  struct Shape {
-    int width, height;
-    bool round;
-    int corner;
-    bool beside;  // the code at the left of the text rather than above it
+TEST("Wi-Fi setup: the screen carries a scannable code for the temporary network") {
+  Rig r(Rig::touch_profile());
+  r.bring_online(true);
+  r.app.on_wifi_setup = [] { return "Network: Hermes-test\nPassword: private-setup-key"; };
+  r.app.on_wifi_setup_ap = [] {
+    hg::WifiSetupAp ap;
+    ap.ssid = "Hermes-test";
+    ap.password = "private-setup-key";
+    return ap;
   };
-  const Shape shapes[] = {{320, 240, false, 0, true}, {240, 240, false, 0, false}, {466, 466, true, 0, false},
-                          {368, 448, false, 40, false}, {320, 170, false, 0, true}};
-  const std::string code = hg::wifi_join_code("Hermes-1A2B", "1a2b3c4d");
-  const hg::QrCode want = hg::QrCode::encode(code);
-  for (const Shape& shape : shapes) {
-    Rig r;
-    if (shape.round) {
-      r.fake.make_round(shape.width);
-    } else {
-      r.fake.width = shape.width;
-      r.fake.height = shape.height;
-      r.fake.fb.assign(static_cast<size_t>(shape.width * shape.height), 0);
-    }
-    r.fake.corner_radius = shape.corner;
-    r.bring_online(true);
-    r.app.on_wifi_setup = [&code] {
-      return hg::App::WifiSetup{
-          "Network: Hermes-1A2B\nPassword: 1a2b3c4d\nOpen http://192.168.4.1\nAvailable for 10 minutes.", code};
-    };
-    CHECK(r.app.start_wifi_setup());
-    // The code is the only pure white on screen, quiet zone included.
-    int x0 = shape.width, y0 = shape.height, x1 = -1, y1 = -1;
-    for (int y = 0; y < shape.height; ++y)
-      for (int x = 0; x < shape.width; ++x)
-        if (r.fake.fb[static_cast<size_t>(y * shape.width + x)] == 0xFFFF) {
-          x0 = std::min(x0, x);
-          y0 = std::min(y0, y);
-          x1 = std::max(x1, x);
-          y1 = std::max(y1, y);
-        }
-    const int side = x1 - x0 + 1, n = want.size() + 4;
-    CHECK(x1 >= 0 && side == y1 - y0 + 1 && side % n == 0);
-    const int px = side / n;
-    CHECK(px >= 2);
-    CHECK_EQ((x0 + x1) / 2 < shape.width / 2 - 2, shape.beside);  // a code above the text is centred
-    bool same = x1 >= 0;
-    for (int y = 0; same && y < want.size(); ++y)
-      for (int x = 0; x < want.size(); ++x) {
-        const uint16_t c = r.fake.fb[static_cast<size_t>((y0 + (y + 2) * px + px / 2) * shape.width + x0 + (x + 2) * px + px / 2)];
-        if ((c == 0) != want.dark(x, y)) same = false;
-      }
-    CHECK(same);
+  CHECK(r.app.start_wifi_setup());
+  CHECK(r.app.screen() == hg::Screen::Setup);
+  const hg::qr::Code* code = r.app.model().qr;
+  CHECK(code != nullptr && code->ok());
+  // The code encodes exactly the credentials the screen prints.
+  if (code) {
+    CHECK_EQ(code->size, hg::qr::encode(hg::qr::payload("Hermes-test", "private-setup-key")).size);
   }
+  // The credentials still reach neither diagnostics nor status.
+  CHECK(r.app.console("diag").find("private-setup-key") == std::string::npos);
+  CHECK(r.app.status_json().find("private-setup-key") == std::string::npos);
+  // Closing the screen drops the code.
+  r.app.close_wifi_setup();
+  CHECK(r.app.model().qr == nullptr);
+}
 
-  // Too little room for a readable code: the instructions alone, as before.
-  Rig tiny;
-  tiny.fake.width = 240;
-  tiny.fake.height = 100;
-  tiny.fake.fb.assign(240 * 100, 0);
-  tiny.bring_online(true);
-  tiny.app.on_wifi_setup = [&code] { return hg::App::WifiSetup{"Network: Hermes-1A2B\nPassword: 1a2b3c4d", code}; };
-  CHECK(tiny.app.start_wifi_setup());
-  CHECK(std::none_of(tiny.fake.fb.begin(), tiny.fake.fb.end(), [](uint16_t c) { return c == 0xFFFF; }));
+TEST("Wi-Fi setup: a port without credentials still shows the text screen") {
+  Rig r(Rig::touch_profile());
+  r.bring_online(true);
+  r.app.on_wifi_setup = [] { return "Temporary setup network"; };
+  // No on_wifi_setup_ap: the text screen must still work, just without a code.
+  CHECK(r.app.start_wifi_setup());
+  CHECK(r.app.screen() == hg::Screen::Setup);
+  CHECK(r.app.model().qr == nullptr);
+  CHECK(r.app.model().body.find("Temporary setup network") != std::string::npos);
+}
+
+TEST("Wi-Fi setup: the code is drawn inside the content band, dark on light") {
+  Rig r(Rig::touch_profile());
+  r.fake.make_round(466);
+  r.bring_online(true);
+  r.app.on_wifi_setup = [] { return "Network: Hermes-test\nPassword: private-setup-key"; };
+  r.app.on_wifi_setup_ap = [] {
+    hg::WifiSetupAp ap;
+    ap.ssid = "Hermes-test";
+    ap.password = "private-setup-key";
+    return ap;
+  };
+  CHECK(r.app.start_wifi_setup());
+  r.advance(200);
+  const hg::qr::Code* code = r.app.model().qr;
+  CHECK(code != nullptr);
+  if (!code) return;
+  // The code is drawn: count pure-black and pure-white pixels. The renderer
+  // draws modules as black on a white panel, which a camera needs.
+  int black = 0, white = 0;
+  for (int y = 0; y < 466; ++y) {
+    for (int x = 0; x < 466; ++x) {
+      uint16_t p = r.fake.fb[static_cast<size_t>(y * 466 + x)];
+      if (p == 0x0000) ++black;
+      if (p == 0xFFFF) ++white;
+    }
+  }
+  CHECK(black > 100);        // the modules
+  CHECK(white > black / 2);  // the panel and quiet zone around them
+  int left = 466, top = 466, right = -1, bottom = -1;
+  for (int y = 0; y < 466; ++y) for (int x = 0; x < 466; ++x) {
+    if (r.fake.fb[static_cast<size_t>(y * 466 + x)] == 0xffff) {
+      left = std::min(left, x); top = std::min(top, y);
+      right = std::max(right, x); bottom = std::max(bottom, y);
+    }
+  }
+  const int cells = code->size + 8;
+  const int scale = (right - left + 1) / cells;
+  CHECK(scale >= 3);
+  CHECK_EQ(right - left + 1, cells * scale);
+  CHECK_EQ(bottom - top + 1, cells * scale);
+  if (scale < 3) return;
+  for (int cy = 0; cy < cells; ++cy) for (int cx = 0; cx < cells; ++cx) {
+    const bool dark = cx >= 4 && cy >= 4 && cx < cells - 4 && cy < cells - 4 && code->at(cx - 4, cy - 4);
+    for (int dy = 0; dy < scale; ++dy) for (int dx = 0; dx < scale; ++dx)
+      CHECK_EQ(r.fake.fb[static_cast<size_t>((top + cy * scale + dy) * 466 + left + cx * scale + dx)],
+               dark ? uint16_t(0) : uint16_t(0xffff));
+  }
+}
+
+TEST("QR content changes at the same size redraw the setup screen") {
+  FakeHal display;
+  display.make_round(466);
+  hg::Ui ui(display);
+  hg::qr::Code first = hg::qr::encode("first"), second = hg::qr::encode("other");
+  CHECK_EQ(first.size, second.size);
+  hg::UiModel model;
+  model.screen = hg::Screen::Setup;
+  model.qr = &first;
+  ui.render(model);
+  const auto before = display.fb;
+  model.qr = &second;
+  ui.render(model);
+  CHECK(before != display.fb);
+}
+
+TEST("Round USB indicator appears without a battery and clears again") {
+  FakeHal display;
+  display.make_round(466);
+  hg::Ui ui(display);
+  hg::UiModel model;
+  ui.render(model);
+  const auto before = display.fb;
+  model.usb_power = true;
+  ui.render(model);
+  CHECK(before != display.fb);
+  model.usb_power = false;
+  ui.render(model);
+  CHECK(before == display.fb);
+}
+
+TEST("Waking a dark display requests a network retry once") {
+  Rig r(Rig::touch_profile());
+  r.fake.backlight = true;
+  r.bring_online(true);
+  int retries = 0;
+  r.app.on_network_retry = [&] { ++retries; };
+  r.app.on_power_key();
+  CHECK(r.app.wake_display());
+  CHECK_EQ(retries, 1);
+  CHECK(!r.app.wake_display());
+  CHECK_EQ(retries, 1);
+}
+
+// The setup screen as the ESP32 port fills it, rendered with or without a code.
+static std::vector<uint16_t> setup_screen(int width, int height, bool round, const hg::qr::Code* code) {
+  FakeHal display;
+  if (round) {
+    display.make_round(width);
+  } else {
+    display.width = width;
+    display.height = height;
+    display.fb.assign(static_cast<size_t>(width * height), 0);
+  }
+  hg::Ui ui(display);
+  hg::UiModel m;
+  m.screen = hg::Screen::Setup;
+  m.headline = "Wi-Fi setup";
+  m.detail = "Connect your phone";
+  m.body = "Network: Hermes-A1B2\nPassword: 3f9c2a1b4d5e6f70\nOpen http://192.168.4.1\nAvailable for 10 minutes.";
+  m.qr = code;
+  ui.render(m);
+  return display.fb;
+}
+
+TEST("Wi-Fi setup: a code that does not fit beside the instructions leaves the text screen") {
+  const hg::qr::Code code = hg::qr::encode(hg::qr::payload("Hermes-A1B2", "3f9c2a1b4d5e6f70"));
+  // 128x128 (AIPI Lite) and 320x240 (BOX-3, CoreS3): the instructions take the room
+  // a scannable code needs, so the screen is the text one, pixel for pixel.
+  CHECK(setup_screen(128, 128, false, &code) == setup_screen(128, 128, false, nullptr));
+  CHECK(setup_screen(320, 240, false, &code) == setup_screen(320, 240, false, nullptr));
+  // 240x240 and the 466 round panel fit the code beside every instruction line.
+  CHECK(setup_screen(240, 240, false, &code) != setup_screen(240, 240, false, nullptr));
+  CHECK(setup_screen(466, 466, true, &code) != setup_screen(466, 466, true, nullptr));
 }
 
 TEST("Wi-Fi setup: opening from USB releases an active talk button") {
   Rig r;
   r.bring_online(true);
   r.app.console("set screen_timeout 30");
-  r.app.on_wifi_setup = [] { return hg::App::WifiSetup{"Temporary setup network", ""}; };
+  r.app.on_wifi_setup = [] { return "Temporary setup network"; };
   r.app.on_button(hg::Button::Talk, true);
   CHECK(r.fake.mic_on);
   CHECK(r.app.start_wifi_setup());
@@ -1673,4 +2638,23 @@ TEST("Wi-Fi setup: opening from USB releases an active talk button") {
   CHECK(!r.app.wifi_setup_open());
   r.advance(30000);
   CHECK_EQ(r.fake.brightness, 0);
+}
+
+TEST("app: a setting that can't be saved is reported, not silently kept in memory") {
+  Rig r;
+  r.app.begin();
+  r.fake.storage_full = true;
+  CHECK_EQ(r.app.console("set name Kitchen"), std::string("@error could not save name"));
+  CHECK(r.app.console("get name").find("\"value\":\"\"") != std::string::npos);
+  r.fake.storage_full = false;
+  CHECK_EQ(r.app.console("set name Kitchen"), std::string("@ok name"));
+  CHECK(r.app.console("get name").find("Kitchen") != std::string::npos);
+}
+
+TEST("app: the device still gets an identity when its key can't be saved") {
+  Rig r;
+  r.fake.storage_full = true;
+  r.app.begin();
+  CHECK(!r.app.device_id().empty());
+  CHECK(r.fake.kv.count("device_key") == 0);
 }

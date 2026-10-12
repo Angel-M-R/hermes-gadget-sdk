@@ -74,7 +74,8 @@ def _cmd_devices(args) -> None:
         seen = rec.get("last_seen")
         when = _dt.datetime.fromtimestamp(seen).strftime("%Y-%m-%d %H:%M") if seen else "-"
         print(f"{device_id}  {rec.get('name') or '-':<24} {rec.get('board') or '-':<28} "
-              f"{rec.get('firmware') or '-':<10} last seen {when}")
+              f"{rec.get('firmware') or '-':<10} last seen {when}"
+              + ("  waiting to pair" if rec.get("pending") else ""))
     print("\nApprove a new device: hermes gadget pair   |   Approved devices: hermes pairing list   |   "
           "Revoke: hermes pairing revoke gadget <device_id>")
 
@@ -147,7 +148,7 @@ def _cmd_update(args) -> None:
         sys.exit(f"{source} is built for {image.board}, but {name} is {board}.")
 
     queue = UpdateQueue(store.path.parent)
-    queue.stage(device_id, image)
+    stage_id = queue.stage(device_id, image)
     print(f"Staged firmware {image.version} ({image.size // 1024} KB) for {name} ({device_id}).")
     if args.no_wait:
         print("The gateway installs it when the device is online.")
@@ -156,6 +157,11 @@ def _cmd_update(args) -> None:
     deadline, last = time.monotonic() + args.timeout, None
     while time.monotonic() < deadline:
         status = queue.status(device_id) or {}
+        if status.get("stage_id") != stage_id:
+            staged = queue.metadata(device_id)
+            if staged and staged.get("stage_id") != stage_id:
+                sys.exit("This update was replaced by another staged image.")
+            status = {}
         state = status.get("state")
         line = {
             "sending": f"  sending: {status.get('sent', 0) * 100 // max(1, status.get('size', 1))}%",
@@ -225,6 +231,22 @@ def _cmd_pair(args) -> None:
             announced = True
         time.sleep(1)
 
+    if args.device:
+        chosen = [w for w in waiting if w[0] == args.device]
+        if not chosen:
+            chosen = [w for w in waiting if (w[1].get("name") or "").lower() == args.device.lower()]
+        if len(chosen) > 1:
+            sys.exit(f"{args.device} matches several gadgets; use a device ID: "
+                     + ", ".join(w[0] for w in chosen))
+        if not chosen:
+            sys.exit(f"{args.device} is not waiting to pair. Waiting: "
+                     + ", ".join(f"{rec.get('name') or device_id} ({device_id})" for device_id, rec, _ in waiting))
+        waiting = chosen
+    if args.yes and len(waiting) > 1:
+        # Blind approval admits one device, not whoever happens to be asking.
+        sys.exit("More than one gadget is waiting to pair; say which one:\n"
+                 + "\n".join(f"  hermes gadget pair --yes {device_id}   # {rec.get('name') or '-'}, code {code}"
+                             for device_id, rec, code in waiting))
     approved = 0
     for device_id, rec, code in waiting:
         name = rec.get("name") or device_id
@@ -249,6 +271,7 @@ def setup_argparse(parser) -> None:
     forget.add_argument("device", help="Device id or name")
     subs.add_parser("info", help="Show the URL devices should connect to, and the installer link")
     pair = subs.add_parser("pair", help="Approve a gadget that shows a pairing code")
+    pair.add_argument("device", nargs="?", help="Only this gadget (id or name); needed with --yes when several wait")
     pair.add_argument("--yes", "-y", action="store_true", help="Approve without asking")
     pair.add_argument("--timeout", type=float, default=PAIR_TIMEOUT_S,
                       help=f"Seconds to wait for a gadget to ask (default {PAIR_TIMEOUT_S})")

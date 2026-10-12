@@ -14,6 +14,7 @@
 #include "hg/hal.hpp"
 #include "hg/mascot.hpp"
 #include "hg/qr.hpp"
+#include "hg/locale.hpp"
 
 namespace hg {
 
@@ -33,9 +34,13 @@ enum class Screen : uint8_t {
   Updating,  // installing a firmware update
   Settings,
   Setup,
+  Controls,  // local volume and text controls; the conversation keeps running
 };
 
 enum class Link : uint8_t { Offline, Network, Connecting, Online };
+enum class Reading : uint8_t { None, Recall, Auto, Paused };
+enum class ReadingControl : uint8_t { None, Recall, Previous, TogglePause, Next };
+enum class QuickControl : uint8_t { None, VolumeDown, Mute, VolumeUp, TextNormal, TextLarge, Close };
 
 const char* screen_name(Screen s);
 
@@ -46,14 +51,26 @@ struct UiModel {
   std::string headline;  // header band, next to the indicator
   std::string detail;    // secondary line (status phrase, URL, error)
   std::string body;      // main text (reply, card body)
-  std::string qr;        // text screens: a QR code's text, drawn with the body where it fits
+  const qr::Code* qr = nullptr;  // borrowed setup matrix, encoded once by App
   std::string code;      // pairing code
   int scroll = -1;       // first visible body line; -1 pins to the end
   uint8_t level = 0;     // microphone level 0..100
   bool speaking = false;
   bool color_test = false;
+  bool settings_hold = true;  // round panels draw the settings target only while holding it works
+  // Battery level, in the top bar (round panels: centred at the top edge, above
+  // the UI square): percent, or -1 to show none. Charging fills
+  // it green; low (and not on USB) fills it red.
+  int8_t battery = -1;
+  bool battery_icon = true, battery_text = true;  // which parts to draw
+  bool battery_charging = false;
+  bool battery_low = false;
   uint32_t frame = 0;    // animation frame, advanced by the app
   std::string hint;      // bottom bar
+  Reading reading = Reading::None;  // touch controls in place of the bottom hint
+  Language language = Language::English;
+  uint8_t volume = 70;
+  bool large_text = false;
   std::string yes, no;   // answer buttons under the hero caption (Prompt screen)
   // Show the mascot as large as fits, with headline/detail as a caption,
   // instead of the header + text layout.
@@ -61,8 +78,6 @@ struct UiModel {
   uint8_t caption_lines = 1;  // hero: lines the detail may wrap to (then "..")
   // Top bar: battery charge in percent (-1 = no reading), charging, and USB
   // power with no battery fitted.
-  int8_t battery = -1;
-  bool charging = false;
   bool usb_power = false;
   // Conversation screens on touch boards: the speaker button (top left on the
   // mascot screens, end of the header otherwise), muted, and a finger on it.
@@ -77,7 +92,9 @@ struct UiModel {
 
 struct UiLayout {
   int scale = 1;  // base text scale
+  int body_scale = 1;  // independently adjustable reply/card/settings text
   int top_h = 0, header_h = 0, bottom_h = 0;
+  int title_w = 0;  // width of the settings hold target in the top band
   int body_cols = 0, body_rows = 0;
   int main_y = 0, main_h = 0;  // area between the bars (used for images)
   int hero_cols = 0;  // characters per hero caption line
@@ -85,7 +102,7 @@ struct UiLayout {
 
 class Ui {
  public:
-  explicit Ui(Display& display);
+  explicit Ui(Display& display, bool touch_screen = false);
 
   // Renders bands whose inputs changed since the last call and flushes them.
   void render(const UiModel& model);
@@ -101,11 +118,15 @@ class Ui {
   // Body text rows visible on a text screen for this model (after detail lines).
   int body_rows(const UiModel& m) const;
   bool title_hit(int x, int y) const {
-    return x >= ox_ && x < ox_ + info_.width && y >= oy_ && y < oy_ + layout_.top_h;
+    const int left = ox_ + (info_.width - layout_.title_w) / 2;
+    return x >= left && x < left + layout_.title_w && y >= oy_ && y < oy_ + layout_.top_h;
   }
   // Panel coordinates inside the speaker button as last drawn (with a margin
   // for fingers); false while it isn't on screen.
   bool speaker_hit(int x, int y) const;
+  ReadingControl reading_hit(const UiModel& m, int x, int y) const;
+  QuickControl control_hit(const UiModel& m, int x, int y) const;
+  void set_large_text(bool large);
 
  private:
   struct Circle {
@@ -118,12 +139,18 @@ class Ui {
   void draw_top(Canvas& c, const UiModel& m);
   void draw_header(Canvas& c, const UiModel& m);
   void draw_content(Canvas& c, const UiModel& m);
-  // The body with the model's QR code above it, or beside it with smaller
-  // text, between rows top and bottom. False when no layout gives a code of
-  // readable size; the body is then drawn alone.
-  bool draw_qr_body(Canvas& c, const UiModel& m, int top, int bottom);
+  // Draw a readable code only when every setup instruction also fits.
+  bool draw_qr(Canvas& c, const UiModel& m, int y0, int y1);
   void draw_bottom(Canvas& c, const UiModel& m);
+  int reading_inset() const;
+  struct Rect { int x, y, w, h; };
+  Rect control_rect(QuickControl control) const;
+  void draw_controls(Canvas& c, const UiModel& m);
   void draw_indicator(Canvas& c, const UiModel& m, int cx, int cy, int r);
+  // Draws the battery icon and percent from x, vertically centred on cy.
+  void draw_battery(Canvas& c, const UiModel& m, int x, int cy);
+  int battery_width(const UiModel& m) const;
+  void draw_round_battery(const UiModel& m);
   struct HeroGeom {
     int size = 0, x = 0, y = 0;  // mascot
     int caption_y = 0, buttons_y = 0;
@@ -143,12 +170,11 @@ class Ui {
   UiLayout layout_;
   uint32_t hash_[4] = {0, 0, 0, 0};
   uint32_t hero_static_ = 0, hero_anim_ = 0;
+  uint32_t battery_hash_ = 0;
   bool hero_valid_ = false;
   bool valid_ = false;
   Circle speaker_;  // as last drawn, for speaker_hit
   bool speaker_in_header_ = false;  // its touch area ends with the header band
-  std::string qr_text_;  // what qr_ encodes, so a code is built once
-  QrCode qr_;
   // Rounded corners: extra bar height above the top text and below the bottom
   // text, and how far each bar's text keeps from the side edges.
   int bar_pad_ = 0, top_inset_ = 0, bottom_inset_ = 0;

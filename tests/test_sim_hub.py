@@ -26,6 +26,35 @@ def test_open_device_reaches_ready_and_text_round_trips(devserver, make_sim):
     assert sim.wait_screen("ready", timeout=5)
 
 
+@pytest.mark.parametrize("raises", [False, True])
+def test_native_core_reports_a_failed_storage_callback(monkeypatch, raises):
+    from hermes_gadget.sim import Simulator
+    sim = Simulator()
+    def fail(key, value):
+        if raises:
+            raise OSError("disk full")
+        return False
+    monkeypatch.setattr(sim, "storage_set", fail)
+    try:
+        sim.start(network=False)
+        assert any("could not save the device key" in message for _, message in sim.logs)
+        assert sim.storage.get("device_key") is None
+    finally:
+        sim.close()
+
+
+def test_spanish_reply_survives_host_shaping_and_device_rendering(devserver, make_sim):
+    hub, _brain, url = devserver()
+    sim = make_sim(url)
+    assert sim.wait_screen("ready", timeout=10)
+    assert next(iter(hub.sessions.values())).charset == "utf8-es"
+    sim.console("set language es")
+    sim.type_text("¿El niño oye una canción? ¡Sí! Pingu\u0308ino.")
+    assert sim.wait_for(lambda: (sim.last_received("turn.end") or {}).get("outcome") == "success", timeout=10)
+    assert sim.last_received("reply")["text"] == "You said: ¿El niño oye una canción? ¡Sí! Pingüino."
+    assert sim.wait_screen("ready", timeout=5)
+
+
 def test_pairing_code_flow(loop_thread, devserver, make_sim):
     hub, brain, url = devserver(require_pairing=True)
     sim = make_sim(url)
@@ -236,6 +265,7 @@ def test_hello_declares_capabilities(devserver, make_sim):
     assert sim.wait_screen("ready", timeout=10)
     hello = next(m for m in sim.sent if m.get("type") == "hello")
     assert hello["proto"] == 1
+    assert hello["caps"]["display"]["charset"] == "utf8-es"
     assert hello["caps"]["display"]["image"]["format"] == "rgb565"
     assert hello["caps"]["mic"] == {"rate": 16000, "format": "pcm16"}
     assert json.dumps(hello)  # serialisable
@@ -253,9 +283,10 @@ def test_holding_cancel_starts_a_new_session(devserver, make_sim):
                         timeout=5)
 
 
-def test_round_touch_board_talks_with_the_screen(devserver, make_sim):
+@pytest.mark.parametrize("board", ["sim-466x466-round", "sim-360x360-round"])
+def test_round_touch_board_talks_with_the_screen(devserver, make_sim, board):
     hub, _brain, url = devserver()
-    sim = make_sim(url, board="sim-466x466-round")
+    sim = make_sim(url, board=board)
     assert sim.wait_screen("ready", timeout=10)
     hello = next(m for m in sim.sent if m["type"] == "hello")
     assert hello["caps"]["display"]["shape"] == "round" and "touch" in hello["caps"]["inputs"]

@@ -30,6 +30,8 @@ The main window shows the device and the current conversation. **Developer tools
 
 Typed messages and voice transcripts appear beside replies as they stream. **Copy reply** copies the latest reply. **Play last audio** replays the latest recorded reply through the computer's default output. Conversation text stays in memory, limited to the last 100 messages, and clears when you start a new session. Audio files remain in the state directory described below.
 
+On a touch-board profile, click the device's title bar or speaker icon for quick volume and text-size controls. Hold the title for one second for device settings, including the pause before sending, recording sounds and interface language. The console accepts `set language es` and `set text_size large`. These settings affect the rendered device screen; the desktop conversation panel keeps its own text layout.
+
 ![The desktop simulator with a live conversation](images/sim-window.png)
 
 ```bash
@@ -53,6 +55,7 @@ A first session, start to finish:
 | Hold **Space + Esc** for 1 s | Open or close the device's settings and local hardware checks |
 | **Space** / **Esc** on a question | Answer yes / no |
 | **Up / Down** | Scroll a long reply (long replies also page by themselves) |
+| Touch profile's bottom reading bar | Click **Pause text**, **<** or **>** to read at your own pace, **Auto pages** to resume, or **Last reply** to reopen the text after the mascot returns |
 | **Ctrl+S** | Save a PNG screenshot into the state directory |
 | **Ctrl+P** | Press the power key: screen off or on (`sim-368x448`) |
 | Text box | Send a typed message, as from a keyboard device |
@@ -64,7 +67,7 @@ A first session, start to finish:
 
 The simulated device registers two demo actions the agent can use: `led.set` (a virtual LED in the window) and `buzzer.beep`.
 
-The [device settings menu](using-gadget.md#device-settings-and-hardware-checks) runs in the native firmware core. On touch profiles, hold the device title bar to open it. You can also enter `settings` in the serial console. The desktop **Settings** dialog configures the simulator host; the device menu changes saved volume, brightness, and talk mode.
+The [device settings menu](using-gadget.md#device-settings-and-hardware-checks) runs in the native firmware core. On touch profiles, hold the device title bar to open it; on `sim-466x466-round`, hold the **SETTINGS** target under the status dot. You can also enter `settings` in the serial console. The desktop **Settings** dialog configures the simulator host; the device menu changes saved volume, brightness, and talk mode.
 
 State lives in `~/.hermes-gadget/sim/<name>/` (override with `--state-dir`):
 
@@ -84,7 +87,8 @@ Like a board, the simulated device takes firmware updates (`hermes gadget update
 | `sim-480x320` | 480×320 | Larger panel |
 | `sim-240x240` | 240×240 | The 1.54" LCD board: two buttons, no scroll buttons, so long replies page by themselves |
 | `sim-240x240-nospeaker` | 240×240 | No speaker, so replies stay text only |
-| `sim-466x466-round` | 466×466 round | The 1.75" AMOLED touch board: hold the mouse on the screen to talk, click to answer yes, drag down to cancel. No scroll buttons, so long replies page by themselves |
+| `sim-360x360-round` | 360×360 round | The 1.85C V2 LCD touch board, with the same controls as `sim-466x466-round` |
+| `sim-466x466-round` | 466×466 round | The 1.75" AMOLED touch board: hold the mouse on the text or mascot to talk, click to answer yes, drag down to cancel. Long replies page automatically; the bottom reading bar pauses, changes pages and recalls the last reply |
 | `sim-368x448` | 368×448, rounded corners | The 1.8" AMOLED touch board: like the round profile, plus the speaker button, the key icons on the right edge, a battery in the top bar (the Battery % slider sets it) and the power key (Ctrl+P) |
 
 Add a profile to `BOARDS` in `python/hermes_gadget/sim/runner.py` to mirror new hardware.
@@ -130,3 +134,5 @@ sim.close()
 ```
 
 `tests/test_sim_hub.py` and `tests/test_gateway_e2e.py` are worked examples.
+
+The native simulator library uses ABI 7. Rebuild an older library with `hermes-gadget build-sim`. Failed storage callbacks, including host callback exceptions, are treated as write failures. The core logs failed identity, volume, brightness, and mute writes; failed `set` command writes return an error to the serial console.

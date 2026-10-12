@@ -50,7 +50,7 @@ Because the id is derived from the key, nobody can claim another device's id wit
  "name": "Kitchen Gadget", "board": "esp32s3-breadboard", "firmware": "0.1.0",
  "token": "<optional access token>",
  "caps": {
-   "display": {"width": 320, "height": 240, "color": true, "charset": "ascii",
+   "display": {"width": 320, "height": 240, "color": true, "charset": "utf8-es",
                "text_cols": 25, "text_rows": 8,
                "image": {"width": 320, "height": 196, "format": "rgb565"}},
    "mic": {"rate": 16000, "format": "pcm16"},
@@ -133,7 +133,7 @@ If authentication fails, the server sends `{"type": "error", "code": "auth_faile
 | `{"type": "prompt.close", "id": "q1"}` | The question was withdrawn (timed out or answered elsewhere) |
 | `{"type": "error", "code": "...", "message": "..."}` | Protocol or auth error; the server usually closes the connection next |
 
-Reply text is already shaped for the device: Markdown is stripped and the text is folded to ASCII when `charset` is `"ascii"`. Devices render it as-is.
+Reply text is already shaped for the device. The host strips Markdown and folds text to ASCII when `charset` is `"ascii"`. The core declares `"utf8-es"`, which preserves ASCII plus `áéíóúüñÁÉÍÓÚÜÑ¿¡` in UTF-8. The host normalizes combining accents to composed characters and folds or removes unsupported symbols. Devices render the shaped text as-is. Older ASCII devices keep their existing fallback.
 
 ### Audio to the device
 
@@ -207,7 +207,7 @@ server                                   device
 | `{"type": "ota.ack", "offset": 16384}` | device → server | Bytes written so far: every 16 KB and at the end |
 | `{"type": "ota.end"}` | server → device | All bytes sent; the device checks the size and SHA-256, then the image itself |
 | `{"type": "ota.done", "version": "0.2.0"}` | device → server | Installed; the device restarts about a second later |
-| `{"type": "ota.error", "code": "checksum", "message": "..."}` | device → server | The update is abandoned. Codes: `unsupported`, `bad_offer`, `too_large`, `no_offer`, `unauthorized`, `flash`, `sequence`, `size`, `checksum`, `invalid`, `timeout`, `no_update` |
+| `{"type": "ota.error", "code": "checksum", "message": "..."}` | device → server | The update is abandoned. Codes: `unsupported`, `bad_offer`, `too_large`, `no_offer`, `unauthorized`, `flash` (also an image whose `HGBOARD=` tag names another board), `sequence`, `size`, `checksum`, `invalid` (also an image with no board tag), `timeout`, `no_update` |
 | `{"type": "ota.abort"}` | server → device | Abandon the update in progress |
 
 ```

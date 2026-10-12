@@ -12,16 +12,7 @@ hermes gateway setup
 
 Choose **Hermes Gadget**. Restart the gateway when setup asks. Setup prints a device address and an installer link with that address filled in.
 
-Setup on this branch selects **Ximena, Spanish from Spain**, through Edge
-(`es-ES-XimenaNeural`). Enabling the plugin installs its declared `edge-tts`
-dependency through Hermes's package manager. Accept the dependency prompt during
-installation; automated installs can add `--yes-deps`.
-
-Every setup run overwrites the current TTS provider and voice with this branch's
-values, including existing installations and repeated setup. Voice settings
-belong to the Hermes host and also affect other chats using that host's
-TTS configuration. Install `ffmpeg` on that computer to decode speech for the
-gadget. Ximena needs internet when generating new speech; no API key is needed.
+Setup preserves the speech provider and voice already configured in Hermes, including on repeated setup. Install the selected provider in the environment used by the gateway and install `ffmpeg` to decode non-WAV speech. Device volume and mute remain local firmware settings.
 
 **You know it worked when:** `hermes gadget info` shows the gadget configuration and device URL. Keep the gateway running so devices can connect.
 
@@ -39,6 +30,8 @@ hermes-gadget sim --url ws://127.0.0.1:8765/gadget --name "Desk Gadget"
 
 If Hermes runs on another computer, replace the URL with the address from `hermes gadget info`. That computer's firewall must allow the gadget port, 8765 by default.
 
+If that port is already in use, [change the gadget port](hermes-integration.md#change-the-gadget-port), restart the gateway, and update the device's server address. Configuration edits and plugin toggles do not change the running listener's port.
+
 ## 3. Approve the device
 
 When the device shows a pairing code, run:
@@ -55,7 +48,7 @@ Check the device name and code before approving it. You can also run `hermes pai
 
 Configure speech recognition and text-to-speech with `hermes tools` and `hermes setup`, or the `stt:` and `tts:` sections of Hermes `config.yaml`. Non-WAV speech output also needs `ffmpeg` on the Hermes computer.
 
-To explicitly select this branch's initial voice for an existing installation:
+For example, to select a Spanish Edge voice explicitly:
 
 ```bash
 hermes config set tts.edge.voice es-ES-XimenaNeural

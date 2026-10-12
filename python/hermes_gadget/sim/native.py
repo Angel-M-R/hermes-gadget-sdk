@@ -20,7 +20,7 @@ from .. import paths
 
 log = logging.getLogger("hermes_gadget.sim")
 
-ABI_VERSION = 6
+ABI_VERSION = 7
 
 BUTTON_TALK, BUTTON_CANCEL, BUTTON_UP, BUTTON_DOWN = 0, 1, 2, 3
 BUTTONS = {"talk": BUTTON_TALK, "cancel": BUTTON_CANCEL, "up": BUTTON_UP, "down": BUTTON_DOWN}
@@ -35,7 +35,7 @@ _START = CFUNCTYPE(c_int, c_void_p, c_uint32)
 _SPK_WRITE = CFUNCTYPE(None, c_void_p, POINTER(c_int16), c_size_t)
 _INT_RET = CFUNCTYPE(c_int, c_void_p)
 _STORAGE_GET = CFUNCTYPE(c_int, c_void_p, c_char_p, POINTER(c_char), c_size_t)
-_STORAGE_SET = CFUNCTYPE(None, c_void_p, c_char_p, c_char_p)
+_STORAGE_SET = CFUNCTYPE(c_int, c_void_p, c_char_p, c_char_p)
 _STORAGE_ERASE = CFUNCTYPE(None, c_void_p, c_char_p)
 _NOW = CFUNCTYPE(c_uint32, c_void_p)
 _RANDOM = CFUNCTYPE(None, c_void_p, POINTER(c_uint8), c_size_t)
@@ -138,7 +138,7 @@ class Host(AudioHost, Protocol):
     def display_flush(self, y0: int, y1: int) -> None: ...
     def display_backlight(self, percent: int) -> None: ...
     def storage_get(self, key: str) -> str | None: ...
-    def storage_set(self, key: str, value: str) -> None: ...
+    def storage_set(self, key: str, value: str) -> bool | None: ...
     def storage_erase(self, key: str) -> None: ...
     def now_ms(self) -> int: ...
     def random_bytes(self, n: int) -> bytes: ...
@@ -281,9 +281,9 @@ class NativeDevice:
             out[n] = b"\x00"
             return len(raw)
 
-        @_guard(None)
+        @_guard(0)
         def storage_set(_u, key, value):
-            h.storage_set(key.decode(), value.decode())
+            return 0 if h.storage_set(key.decode(), value.decode()) is False else 1
 
         @_guard(None)
         def storage_erase(_u, key):

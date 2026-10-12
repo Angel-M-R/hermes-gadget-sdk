@@ -29,9 +29,9 @@ def test_hermes_lets_the_plugin_install_from_github(tmp_path):
     assert allowed is True, f"{reason}\n{format_scan_report(result)}"
 
 
-def test_hermes_recognizes_the_declared_initial_voice_engine():
+def test_the_plugin_does_not_install_a_voice_engine_over_the_hermes_choice():
     from pm.plugin_declarations import read_python_declaration
 
     declaration = read_python_declaration(REPO / "plugin")
-    assert declaration.is_member is True
-    assert any(req.replace(" ", "").startswith("edge-tts") for req in declaration.install_requirements)
+    assert declaration.install_requirements == ()
+    assert declaration.is_member is False

@@ -1,12 +1,15 @@
-// Touch controllers and a key mirrored on a TCA9554 expander, polled over
-// I2C from their own task. Samples become Touch and Key events; the app task
-// turns them into gestures (hg::TouchGestures) and button presses.
+// Touch controllers, a key mirrored on a TCA9554 or PCF8574 expander and a
+// rotary encoder. Touch and key polling run on their own task; encoder GPIO
+// edges are captured by an ISR. Samples become Touch, Key and
+// Encoder events; the app task turns them into gestures (hg::TouchGestures)
+// and button presses.
 #include "port.hpp"  // first: pulls in FreeRTOS.h ahead of task.h/queue.h
 
 #include <algorithm>
 
 #include "driver/gpio.h"
 #include "esp_log.h"
+#include "cst816.hpp"
 #include "esp_lcd_touch_gt911.h"
 #include "esp_lcd_touch_tt21100.h"
 #include "esp_lcd_touch_ft5x06.h"
@@ -19,13 +22,11 @@ const char* TAG = "hg.touch";
 constexpr uint32_t kPollMs = 20;
 constexpr uint8_t kTca9554Input = 0x00;
 constexpr uint8_t kCstAck = 0xAB;
-constexpr uint8_t kCst820Points = 0x02;      // finger count, then X and Y, 12 bits each
-constexpr uint8_t kCst820Sleep = 0xE5;        // 0x03: deep sleep until reset
-constexpr uint8_t kCst820NoAutoSleep = 0xFE;  // else it stops answering I2C when idle
 
 }  // namespace
 
-bool TouchInput::begin(const TouchConfig& touch, const ExpanderKeyConfig& key, i2c_master_bus_handle_t bus) {
+bool TouchInput::begin(const TouchConfig& touch, const ExpanderKeyConfig& key, const EncoderConfig& encoder,
+                       i2c_master_bus_handle_t bus) {
   if (!bus) return false;
   touch_ = touch;
   key_ = key;
@@ -46,14 +47,6 @@ bool TouchInput::begin(const TouchConfig& touch, const ExpanderKeyConfig& key, i
         esp_lcd_touch_new_i2c_ft5x06(io, &cfg, &managed_touch_) != ESP_OK) esp_lcd_panel_io_del(io);
   } else if (touch.enabled && touch.controller == TouchController::Box3) {
     begin_box_touch(bus);
-  } else if (touch.enabled && touch.controller == TouchController::Cst820) {
-    i2c_device_config_t dev = {};
-    dev.dev_addr_length = I2C_ADDR_BIT_LEN_7;
-    dev.device_address = touch.addr;
-    dev.scl_speed_hz = 400000;
-    if (i2c_master_bus_add_device(bus, &dev, &touch_dev_) == ESP_OK && !reset_cst820()) {
-      ESP_LOGW(TAG, "touch controller at 0x%02x did not answer", touch.addr);
-    }
   } else if (touch.enabled) {
     if (touch.rst >= 0) {
       gpio_config_t rst = {};
@@ -70,9 +63,13 @@ bool TouchInput::begin(const TouchConfig& touch, const ExpanderKeyConfig& key, i
     dev.device_address = touch.addr;
     dev.scl_speed_hz = 400000;
     if (i2c_master_bus_add_device(bus, &dev, &touch_dev_) == ESP_OK) {
-      const uint8_t command_mode[2] = {0xD1, 0x01};
+      const uint8_t command_mode[2] = {touch.controller == TouchController::Cst816 ? uint8_t(0xFE) : uint8_t(0xD1), 0x01};
       if (i2c_master_transmit(touch_dev_, command_mode, sizeof(command_mode), 50) != ESP_OK) {
         ESP_LOGW(TAG, "touch controller at 0x%02x did not answer", touch.addr);
+        if (touch.controller == TouchController::Cst816) {
+          i2c_master_bus_rm_device(touch_dev_);
+          touch_dev_ = nullptr;
+        }
       }
       vTaskDelay(pdMS_TO_TICKS(10));
     }
@@ -83,23 +80,54 @@ bool TouchInput::begin(const TouchConfig& touch, const ExpanderKeyConfig& key, i
     dev.device_address = key.addr;
     dev.scl_speed_hz = 400000;
     if (i2c_master_bus_add_device(bus, &dev, &key_dev_) != ESP_OK) key_dev_ = nullptr;
+    if (key_dev_ && key.pcf8574) {
+      // A PCF8574 pin reads as an input only while its output latch is high.
+      const uint8_t release = 0xFF;
+      if (i2c_master_transmit(key_dev_, &release, 1, 50) != ESP_OK) ESP_LOGW(TAG, "PCF8574 at 0x%02x did not answer", key.addr);
+    }
   }
-  if (!has_touch() && !key_dev_) return false;
-  xTaskCreate(&TouchInput::task, "hg-touch", 3072, this, 5, nullptr);
-  ESP_LOGI(TAG, "touch %s, key %s", has_touch() ? "ready" : "off", key_dev_ ? "ready" : "off");
+  if (encoder.a >= 0 && encoder.b >= 0) {
+    gpio_config_t pins = {};
+    pins.pin_bit_mask = (1ULL << encoder.a) | (1ULL << encoder.b);
+    pins.mode = GPIO_MODE_INPUT;
+    pins.pull_up_en = GPIO_PULLUP_ENABLE;
+    const auto service = gpio_install_isr_service(0);
+    if ((service == ESP_OK || service == ESP_ERR_INVALID_STATE) && gpio_config(&pins) == ESP_OK) {
+      encoder_a_ = static_cast<gpio_num_t>(encoder.a);
+      encoder_b_ = static_cast<gpio_num_t>(encoder.b);
+      encoder_.reset(static_cast<uint8_t>((gpio_get_level(encoder_a_) << 1) | gpio_get_level(encoder_b_)));
+      encoder_edges_ = xQueueCreate(256, sizeof(uint8_t));
+      if (!encoder_edges_ || gpio_isr_handler_add(encoder_a_, encoder_edge, this) != ESP_OK ||
+          gpio_isr_handler_add(encoder_b_, encoder_edge, this) != ESP_OK) {
+        gpio_isr_handler_remove(encoder_a_);
+        gpio_isr_handler_remove(encoder_b_);
+        if (encoder_edges_) vQueueDelete(encoder_edges_);
+        encoder_edges_ = nullptr;
+        encoder_a_ = encoder_b_ = GPIO_NUM_NC;
+      }
+    }
+  }
+  const bool has_encoder = encoder_a_ != GPIO_NUM_NC;
+  if (!has_touch() && !key_dev_ && !has_encoder) return false;
+  if (xTaskCreate(&TouchInput::task, "hg-touch", 3072, this, 5, nullptr) != pdPASS) {
+    if (has_encoder) {
+      gpio_isr_handler_remove(encoder_a_);
+      gpio_isr_handler_remove(encoder_b_);
+      vQueueDelete(encoder_edges_); encoder_edges_ = nullptr;
+      encoder_a_ = encoder_b_ = GPIO_NUM_NC;
+    }
+    ESP_LOGE(TAG, "could not start the touch task");
+    return false;
+  }
+  if (has_encoder) {
+    gpio_set_intr_type(encoder_a_, GPIO_INTR_ANYEDGE);
+    gpio_set_intr_type(encoder_b_, GPIO_INTR_ANYEDGE);
+    gpio_intr_enable(encoder_a_);
+    gpio_intr_enable(encoder_b_);
+  }
+  ESP_LOGI(TAG, "touch %s, key %s, encoder %s", has_touch() ? "ready" : "off", key_dev_ ? "ready" : "off",
+           has_encoder ? "ready" : "off");
   return true;
-}
-
-// Idle since power-up or put to sleep, a CST820 ignores I2C until its reset
-// line is pulsed. Afterwards it must be told again not to doze off.
-bool TouchInput::reset_cst820() {
-  if (touch_.expander_rst >= 0) expander::pulse(static_cast<uint8_t>(touch_.expander_rst));
-  const uint8_t stay_awake[2] = {kCst820NoAutoSleep, 0x01};
-  return i2c_master_transmit(touch_dev_, stay_awake, sizeof(stay_awake), 50) == ESP_OK;
-}
-
-bool TouchInput::can_sleep() const {
-  return touch_dev_ && touch_.controller == TouchController::Cst820 && touch_.expander_rst >= 0;
 }
 
 bool TouchInput::read_touch(TouchSample& out) {
@@ -111,16 +139,11 @@ bool TouchInput::read_touch(TouchSample& out) {
     out = {down && points > 0, static_cast<int16_t>(x), static_cast<int16_t>(y)};
     return true;
   }
-  if (touch_.controller == TouchController::Cst820) {
-    uint8_t reg = kCst820Points, buf[5] = {};
-    if (i2c_master_transmit_receive(touch_dev_, &reg, 1, buf, sizeof(buf), 20) != ESP_OK) return false;
-    const bool down = (buf[0] & 0x0F) > 0;
-    int x = std::min<int>(((buf[1] & 0x0F) << 8) | buf[2], touch_.width - 1);
-    int y = std::min<int>(((buf[3] & 0x0F) << 8) | buf[4], touch_.height - 1);
-    if (touch_.mirror_x) x = touch_.width - 1 - x;
-    if (touch_.mirror_y) y = touch_.height - 1 - y;
-    out = {down, static_cast<int16_t>(x), static_cast<int16_t>(y)};
-    return true;
+  if (touch_.controller == TouchController::Cst816) {
+    const uint8_t reg = 0x02;
+    uint8_t data[5] = {};
+    if (i2c_master_transmit_receive(touch_dev_, &reg, 1, data, sizeof(data), 20) != ESP_OK) return false;
+    return hg::cst816_touch(data, touch_.width, touch_.height, out.touching, out.x, out.y);
   }
   const uint8_t reg[2] = {0xD0, 0x00};
   if (i2c_master_transmit(touch_dev_, reg, sizeof(reg), 20) != ESP_OK) return false;
@@ -161,7 +184,7 @@ bool TouchInput::begin_box_touch(i2c_master_bus_handle_t bus) {
   cfg.x_max = touch_.width;
   cfg.y_max = touch_.height;
   cfg.rst_gpio_num = GPIO_NUM_NC;  // Display initialization already reset the shared line.
-  cfg.int_gpio_num = GPIO_NUM_3;
+  cfg.int_gpio_num = touch_.int_gpio >= 0 ? static_cast<gpio_num_t>(touch_.int_gpio) : GPIO_NUM_NC;
   cfg.flags.mirror_x = tt21100;
   const esp_err_t err = tt21100 ? esp_lcd_touch_new_i2c_tt21100(io, &cfg, &managed_touch_)
                               : esp_lcd_touch_new_i2c_gt911(io, &cfg, &managed_touch_);
@@ -171,46 +194,60 @@ bool TouchInput::begin_box_touch(i2c_master_bus_handle_t bus) {
 
 bool TouchInput::read_key(bool& pressed) {
   uint8_t reg = kTca9554Input, value = 0;
-  if (i2c_master_transmit_receive(key_dev_, &reg, 1, &value, 1, 20) != ESP_OK) return false;
+  const esp_err_t err = key_.pcf8574 ? i2c_master_receive(key_dev_, &value, 1, 20)
+                                     : i2c_master_transmit_receive(key_dev_, &reg, 1, &value, 1, 20);
+  if (err != ESP_OK) return false;
   bool high = (value >> key_.bit) & 1;
   pressed = key_.active_high ? high : !high;
+  return true;
+}
+
+// The ISR only snapshots GPIOs into a bounded queue. I2C touch/key waits must
+// not hide transitions; decoding and app events stay on the input task.
+void TouchInput::encoder_edge(void* arg) {
+  auto* self = static_cast<TouchInput*>(arg);
+  const uint8_t state = static_cast<uint8_t>((gpio_get_level(self->encoder_a_) << 1) | gpio_get_level(self->encoder_b_));
+  BaseType_t woken = pdFALSE;
+  if (xQueueSendFromISR(self->encoder_edges_, &state, &woken) != pdTRUE) self->encoder_overflow_.store(true);
+  if (woken) portYIELD_FROM_ISR();
+}
+
+bool TouchInput::sample_encoder(int& direction) {
+  direction = 0;
+  if (!encoder_edges_) return false;
+  uint8_t state = 0;
+  if (xQueueReceive(encoder_edges_, &state, 0) != pdTRUE) return false;
+  direction = encoder_.sample(state);
   return true;
 }
 
 void TouchInput::task(void* arg) {
   auto* self = static_cast<TouchInput*>(arg);
   bool was_touching = false, key_down = false;
-  bool failed = false;     // the last sleep or wake didn't take
-  TickType_t retry_at = 0;  // ...so wait until then; compared only while failed
+  hg::Cst816Fault fault;
+  TouchSample last{};
+  int pending_encoder = 0;
   for (;;) {
-    const bool sleep = self->sleep_wanted_;
-    if (sleep == self->asleep_) failed = false;  // nothing left to retry
-    if (sleep != self->asleep_ && self->can_sleep() &&
-        (!failed || static_cast<int32_t>(xTaskGetTickCount() - retry_at) >= 0)) {
-      if (sleep && was_touching) {
-        // The finger is lifted for the app before the controller goes quiet.
-        TouchSample up{};
-        events::post(EventType::Touch, &up, sizeof(up));
-        was_touching = false;
-      }
-      const uint8_t deep_sleep[2] = {kCst820Sleep, 0x03};
-      const bool done = sleep ? i2c_master_transmit(self->touch_dev_, deep_sleep, sizeof(deep_sleep), 50) == ESP_OK
-                              : self->reset_cst820();
-      if (done) {
-        self->asleep_ = sleep;
-        failed = false;
-      } else {
-        // Stay as it was and try again: a wake that failed would leave touch dead.
-        retry_at = xTaskGetTickCount() + pdMS_TO_TICKS(1000);
-        if (!failed) ESP_LOGW(TAG, "touch controller did not %s; retrying", sleep ? "sleep" : "wake");
-        failed = true;
-      }
-    }
     TouchSample s{};
-    if (self->has_touch() && !self->asleep_ && self->read_touch(s)) {
+    if (self->has_touch() && self->read_touch(s)) {
+      s.y = static_cast<int16_t>(s.y - self->touch_.offset_y);
+      fault.valid();
       // Every sample while the finger is down (gestures need the motion), plus the lift.
-      if (s.touching || was_touching) events::post(EventType::Touch, &s, sizeof(s));
-      was_touching = s.touching;
+      if (s.touching || was_touching) {
+        const bool posted = events::post(EventType::Touch, &s, sizeof(s));
+        // CST816: keep the delivered state until enqueue succeeds, including a lift.
+        if (posted || self->touch_.controller != TouchController::Cst816) was_touching = s.touching;
+      }
+      last = s;
+    } else if (self->touch_.controller == TouchController::Cst816 &&
+               fault.release_due(was_touching)) {
+      // Five failed polls (~100–200 ms plus scheduler delay): release once.
+      // Retry if the event queue is full; do not silently lose the release.
+      last.touching = false;
+      if (events::post(EventType::Touch, &last, sizeof(last))) {
+        was_touching = false;
+        ESP_LOGW(TAG, "CST816 fault: held touch released after five failed polls");
+      }
     }
     bool pressed = false;
     if (self->key_dev_ && self->read_key(pressed) && pressed != key_down) {
@@ -218,6 +255,16 @@ void TouchInput::task(void* arg) {
       KeySample k{pressed};
       events::post(EventType::Key, &k, sizeof(k));
     }
+    if (self->encoder_overflow_.exchange(false)) {
+      xQueueReset(self->encoder_edges_);
+      self->encoder_.reset(static_cast<uint8_t>((gpio_get_level(self->encoder_a_) << 1) | gpio_get_level(self->encoder_b_)));
+      ESP_LOGW(TAG, "encoder queue overflow; discarded incomplete detents");
+    }
+    hg::drain_encoder(pending_encoder, [self](int& direction) { return self->sample_encoder(direction); },
+      [](int direction) {
+        EncoderSample e{static_cast<int8_t>(direction)};
+        return events::post(EventType::Encoder, &e, sizeof(e));
+      });
     vTaskDelay(pdMS_TO_TICKS(kPollMs));
   }
 }
