@@ -145,7 +145,7 @@ def test_an_unapproved_device_expires_and_an_approved_one_stays(tmp_path, monkey
 
 def test_forget_serializes_with_a_gateway_write(tmp_path, monkeypatch):
     import threading
-    from concurrent.futures import ThreadPoolExecutor
+    from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 
     gateway, cli = DeviceStore(tmp_path), DeviceStore(tmp_path)
     device = "hg-0123456789abcdef"
@@ -169,7 +169,7 @@ def test_forget_serializes_with_a_gateway_write(tmp_path, monkeypatch):
         removed = pool.submit(forget)
         assert forgetting.wait(5)
         try:
-            with pytest.raises(TimeoutError):
+            with pytest.raises(FutureTimeoutError):
                 removed.result(timeout=0.15)
         finally:
             release.set()

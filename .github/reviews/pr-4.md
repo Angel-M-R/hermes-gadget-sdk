@@ -93,3 +93,7 @@ Validation results are recorded in the PR description.
 Before the fixes, the new registry/approval/activity tests failed and the new QR length, overlapping-tag and retry-wrap tests failed. An early gateway run exposed test instrumentation still observing the old terminal-report method; it now observes the atomic write while preserving its assertions and tests replacement at the real adapter call site. The final gateway suite passes. macOS UI attempts could not initialize Tcl: the managed Python lacked a usable init.tcl and Homebrew Python lacked _tkinter. UI validation therefore ran on Debian with Tk and Xvfb. Initial container setup attempts lacked make and Git; the final environment includes make and calls the package builder directly with an explicit revision.
 
 No USB flashing, physical audio measurement, frequency/power measurement or experimental-port verification was performed. Remote CI must validate the pushed revision before any merge.
+
+## Python 3.10 CI follow-up
+
+The concurrency regression correctly waited on the file lock, but expected the built-in TimeoutError. Python 3.10's Future.result raises concurrent.futures.TimeoutError, which is a separate class there. Importing that exception explicitly preserves the same blocking assertion on every supported Python version. The isolated regression failed before this two-line correction and the plugin unit suite passed afterward on Python 3.10 and 3.13. Production code is unchanged.
