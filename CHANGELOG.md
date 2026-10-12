@@ -4,6 +4,8 @@
 
 ### Fork integration
 
+- Retry Windows file-lock contention without a ten-attempt cutoff, retain encoder detents while the app queue is full, stop on failed CPU frequency locks, and avoid rereading firmware images for OTA status updates. Clarify pairing-code expiry and simulator write errors.
+
 - Address PR #4 review findings: serialize device and OTA files across processes, keep active pending gadgets visible, restore Linux releases after start failures, harden QR/NVS bounds, preserve partial audio transfers, queue encoder edges and clean up failed display initialization. Simulator storage failures are propagated with ABI 7. Hardware behavior remains subject to physical validation.
 
 - Integrate upstream/main at `d0b317acda21eed50bc4fb2e6514ed632adba730`, retaining the fork's selectable faces, full AMOLED-1.8 layout, physical key controls, local mute, reading controls, large text and Spanish interface. Audio codec parameters and streaming pacing use the upstream implementation, with review fixes for partial I2S transfers, WebSocket receive serialization and retry timing. The AMOLED-1.8 migration needs a new physical audio and power report.

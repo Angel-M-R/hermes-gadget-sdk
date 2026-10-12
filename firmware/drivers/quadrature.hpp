@@ -2,6 +2,18 @@
 #include <cstdint>
 
 namespace hg {
+// Retry a congested app queue before consuming another encoder sample.
+template <class Next, class Post>
+void drain_encoder(int& pending, Next&& next, Post&& post) {
+  for (;;) {
+    if (pending) {
+      if (!post(pending)) return;
+      pending = 0;
+    }
+    if (!next(pending)) return;
+  }
+}
+
 class Quadrature {
  public:
   void reset(uint8_t state) { state_ = state & 3; accumulated_ = 0; }

@@ -223,13 +223,24 @@ class UpdateQueue:
             return []
         return sorted(p.stem for p in self.dir.glob("*.bin") if protocol.DEVICE_ID_RE.match(p.stem))
 
-    def _load(self, device_id: str) -> Optional[tuple[bytes, dict]]:
+    def _metadata(self, device_id: str) -> Optional[dict]:
         try:
-            data = self._path(device_id, ".bin").read_bytes()
+            if not self._path(device_id, ".bin").is_file():
+                return None
             meta = json.loads(self._path(device_id, ".json").read_text(encoding="utf-8"))
         except (OSError, ValueError):
             return None
-        return (data, meta) if isinstance(meta, dict) else None
+        return meta if isinstance(meta, dict) else None
+
+    def _load(self, device_id: str) -> Optional[tuple[bytes, dict]]:
+        meta = self._metadata(device_id)
+        if meta is None:
+            return None
+        try:
+            data = self._path(device_id, ".bin").read_bytes()
+        except OSError:
+            return None
+        return data, meta
 
     def load(self, device_id: str) -> Optional[tuple[bytes, dict]]:
         with self._lock(device_id):
@@ -237,10 +248,9 @@ class UpdateQueue:
 
     def count_attempt(self, device_id: str, expected_id: str | None = None) -> int:
         with self._lock(device_id):
-            staged = self._load(device_id)
-            if staged is None or (expected_id is not None and staged[1].get("stage_id", "") != expected_id):
+            meta = self._metadata(device_id)
+            if meta is None or (expected_id is not None and meta.get("stage_id", "") != expected_id):
                 return 0
-            meta = staged[1]
             meta["attempts"] = int(meta.get("attempts") or 0) + 1
             self._write(self._path(device_id, ".json"), json.dumps(meta).encode())
             return meta["attempts"]
@@ -259,8 +269,8 @@ class UpdateQueue:
     def report(self, device_id: str, *, expected_id: str | None = None, **status) -> None:
         with self._lock(device_id):
             if expected_id is not None:
-                staged = self._load(device_id)
-                if staged is None or staged[1].get("stage_id", "") != expected_id:
+                meta = self._metadata(device_id)
+                if meta is None or meta.get("stage_id", "") != expected_id:
                     return
                 status["stage_id"] = expected_id
             self._report(device_id, **status)
@@ -268,8 +278,8 @@ class UpdateQueue:
     def complete(self, device_id: str, expected_id: str, *, drop: bool = True, **status) -> bool:
         """Finish only this staged image; a replacement belongs to the next task."""
         with self._lock(device_id):
-            staged = self._load(device_id)
-            if staged is None or staged[1].get("stage_id", "") != expected_id:
+            meta = self._metadata(device_id)
+            if meta is None or meta.get("stage_id", "") != expected_id:
                 return False
             if drop:
                 self._drop(device_id)

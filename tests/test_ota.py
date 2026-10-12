@@ -15,6 +15,26 @@ KEY = bytes(range(32))
 DEVICE_ID = protocol.device_id_for_key(KEY)
 
 
+def test_progress_and_completion_do_not_read_the_firmware_again(tmp_path, monkeypatch):
+    queue = ota.UpdateQueue(tmp_path)
+    stage_id = queue.stage(DEVICE_ID, ota.inspect_image(fake_image()))
+    image_path = queue._path(DEVICE_ID, ".bin")
+    read_bytes = type(image_path).read_bytes
+
+    def guarded_read(path):
+        if path == image_path:
+            pytest.fail("status operations must not allocate the firmware image")
+        return read_bytes(path)
+
+    monkeypatch.setattr(type(image_path), "read_bytes", guarded_read)
+    assert queue.count_attempt(DEVICE_ID, stage_id) == 1
+    queue.report(DEVICE_ID, expected_id=stage_id, state="sending", sent=1024)
+    assert queue.status(DEVICE_ID)["sent"] == 1024
+    assert queue.complete(DEVICE_ID, stage_id, state="done")
+    assert queue.status(DEVICE_ID)["state"] == "done"
+    assert not image_path.exists()
+
+
 def test_an_image_says_what_it_is():
     image = ota.inspect_image(fake_image(board="esp32s3-touch-amoled-1.75", version="0.3.1"))
     assert (image.version, image.board, image.size) == ("0.3.1", "esp32s3-touch-amoled-1.75", 150_000)

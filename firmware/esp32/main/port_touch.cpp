@@ -226,6 +226,7 @@ void TouchInput::task(void* arg) {
   bool was_touching = false, key_down = false;
   hg::Cst816Fault fault;
   TouchSample last{};
+  int pending_encoder = 0;
   for (;;) {
     TouchSample s{};
     if (self->has_touch() && self->read_touch(s)) {
@@ -254,18 +255,16 @@ void TouchInput::task(void* arg) {
       KeySample k{pressed};
       events::post(EventType::Key, &k, sizeof(k));
     }
-    int direction = 0;
     if (self->encoder_overflow_.exchange(false)) {
       xQueueReset(self->encoder_edges_);
       self->encoder_.reset(static_cast<uint8_t>((gpio_get_level(self->encoder_a_) << 1) | gpio_get_level(self->encoder_b_)));
       ESP_LOGW(TAG, "encoder queue overflow; discarded incomplete detents");
     }
-    while (self->sample_encoder(direction)) {
-      if (direction) {
+    hg::drain_encoder(pending_encoder, [self](int& direction) { return self->sample_encoder(direction); },
+      [](int direction) {
         EncoderSample e{static_cast<int8_t>(direction)};
-        events::post(EventType::Encoder, &e, sizeof(e));
-      }
-    }
+        return events::post(EventType::Encoder, &e, sizeof(e));
+      });
     vTaskDelay(pdMS_TO_TICKS(kPollMs));
   }
 }
