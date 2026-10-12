@@ -1497,7 +1497,7 @@ void App::update_model() {
   m.usb_power = false;
   if (power_status_) m.usb_power = battery_display_ != BatteryIndicator::Off &&
       power_status_->battery_present == false && power_status_->external_power == true;
-  if (battery_display_ != BatteryIndicator::Off && power_status_ && power_status_->battery_percent && power_status_->battery_present != false) {
+  if (battery_display_ != BatteryIndicator::Off && battery_readable()) {
     const auto& p = *power_status_;
     m.battery = static_cast<int8_t>(std::min<int>(*p.battery_percent, 100));
     m.battery_charging = p.charging == true;

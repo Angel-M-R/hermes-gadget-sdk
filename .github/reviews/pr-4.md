@@ -122,3 +122,16 @@ All eight additional inline comments were evaluated, including the OTA finding t
 - [docs/simulator.md](https://github.com/Angel-M-R/hermes-gadget-sdk/pull/4#discussion_r4247246705): distinguish logged identity/volume/brightness/mute failures from serial-console errors for set commands.
 
 Validation for this round: 192 C++ core cases plus the locked-version QR executable passed; 284 Python tests passed with 38 environment-dependent skips; 142 relevant Python 3.10 tests passed; all 43 pinned-Hermes integration cases passed with model/STT/TTS doubles. Site tests passed (29), all 19 guide pages built, and all 12 firmware profiles compiled with ESP-IDF 6.1.0 after the CPU-lock correction. No changes to vendor material or additional licensing requirements apply. The Windows lock and CPU error probes use test doubles; no board was flashed.
+
+## Upstream sync at 66b4af0
+
+Merged `Adolanium/hermes-gadget-sdk` main at `66b4af0f51485830b9598669869a82374d5fcb2a` (12 commits: AMOLED-1.75C battery curves, battery log, battery indicator follow-ups, a dark screen through reconnects). Conflicts were resolved as follows:
+
+- `power_tick()` adopts upstream's rule that a settling connection keeps a lit screen lit and leaves a dark one dark. A screen turned off with PWR also stays off through reconnects, replacing the fork's wake on connection loss; prompts and updates still wake it, and starting Wi-Fi setup wakes it directly. Upstream's "a dark screen stays dark while the connection drops and comes back" test covers the PWR case.
+- `update_model()` keeps the fork's USB-without-battery flag and uses upstream's `battery_readable()`.
+- The adapter keeps the compatibility check and per-device TTS providers alongside upstream's battery log. Both sets of plugin unit tests are kept.
+- The daily-use guide documents the combined PWR behavior and restores the settings/prompt paragraph that the `539248f` merge had dropped from both parents.
+
+Before this push, the 16 unresolved threads were rechecked against the current source. The source matches the dispositions recorded above for items 10, 12, 21, 30, 34, 42, 46, 49 and 61–65, the THIRD_PARTY_NOTICES.md:31 follow-up and the port_touch.cpp encoder follow-up. Item 31 intentionally keeps the upstream AMOLED-1.8 fixed-frequency policy.
+
+Validation after the merge: 207 core cases plus the locked-version QR executable; 286 Python tests passed with 40 environment-dependent skips on macOS; 45 pinned-Hermes cases including the gateway end-to-end run; 29 site tests and 19 guide pages; AMOLED-1.75C and AMOLED-1.8 ESP-IDF builds; version agreement and `git diff --check`. No board was flashed.

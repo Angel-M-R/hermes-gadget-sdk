@@ -4,6 +4,8 @@
 
 ### Fork integration
 
+- Integrate upstream/main at `66b4af0f51485830b9598669869a82374d5fcb2a`: AMOLED-1.75C battery curves, the optional per-device battery log, battery indicator follow-ups and a dark screen that stays dark through reconnects. A screen turned off with PWR now also stays off while Wi-Fi or Hermes drops and comes back; prompts, Wi-Fi setup and updates still wake it.
+
 - Retry Windows file-lock contention without a ten-attempt cutoff, retain encoder detents while the app queue is full, stop on failed CPU frequency locks, and avoid rereading firmware images for OTA status updates. Clarify pairing-code expiry and simulator write errors.
 
 - Address PR #4 review findings: serialize device and OTA files across processes, keep active pending gadgets visible, restore Linux releases after start failures, harden QR/NVS bounds, preserve partial audio transfers, queue encoder edges and clean up failed display initialization. Simulator storage failures are propagated with ABI 7. Hardware behavior remains subject to physical validation.
@@ -21,8 +23,10 @@
 
 ### Firmware
 
+- A dark screen stays dark while Wi-Fi or the connection to Hermes drops and reconnects; it used to light up and, without a screen timeout, stay on until someone turned it off. Contributed by Antonio Lourenco (@tozes).
+- The AMOLED-1.75C shows its battery percentage from a discharge curve measured on its 500 mAh cell, smoothed over a minute and never rising on battery, instead of the AXP2101 gauge, which read up to 14 points low on this cell, or the linear voltage estimate used when the gauge is invalid, which was off by up to 13 points. While charging it follows a charge curve measured on the same cell, never falling, and shows 100 once charging is done; `diag` reports the PMIC's charge current limit. Builds on the voltage fallback for invalid gauge readings. Contributed by Antonio Lourenco (@tozes).
 - Boards with a separate ES7210 microphone ADC (the AMOLED-1.75 and 1.75C, the 1.85C V2 and the LCD-1.54) power it down between recordings instead of running and reading it continuously, which saves battery. Recording starts by draining the audio the I2S channel kept while the ADC was off and dropping 20 ms while it settles. Boards whose microphone shares the speaker's codec keep reading continuously. Contributed by Antonio Lourenco (@tozes).
-- Boards that report a battery percentage show it at the top of the screen: a battery icon and the percentage in the title bar, or centred at the top edge of round displays, green while charging and red at 10 percent or less without USB. Selecting **Battery and power** in device settings cycles it through icon only, percentage only, both and off; the console takes `set battery_display icon|percentage|both|off`. It is off by default and the choice survives restarts. Contributed by Antonio Lourenco (@tozes).
+- Boards that report a battery percentage show it at the top of the screen: a battery icon and the percentage in the title bar, or centred at the top edge of round displays, green while charging and red at 10 percent or less without USB. Selecting **Battery and power** in device settings cycles it through icon only, percentage only, both and off, when the board has a percentage to show; the console takes `set battery_display icon|percentage|both|off`. It is off by default and the choice survives restarts. Contributed by Antonio Lourenco (@tozes).
 - On battery, Wi-Fi retries back off from 3 s to 30 s, like the Hermes reconnect, instead of trying every 3 s, so a long stretch without coverage costs little. Plugged in, they stay at every 3 s. Contributed by Antonio Lourenco (@tozes).
 - AMOLED boards (the 1.75, 1.75C and 1.8) draw the background true black instead of near black, so those pixels stay off and draw no power. Backlit LCDs keep the near-black background. Display drivers opt in with `DisplayInfo::emissive`. Contributed by Antonio Lourenco (@tozes).
 - Battery life on the AMOLED-1.75C: the speaker amplifier is powered only while sound plays, and the CPU scales down to 80 MHz when idle instead of running at 240 MHz. AMOLED panels also switch their output off during screen sleep, not only their brightness. Contributed by Antonio Lourenco (@tozes).
@@ -43,6 +47,7 @@
 
 ### Hermes plugin
 
+- `battery_log: true` in the gadget platform's `extra` keeps each paired device's battery readings (voltage, percent, charging, USB power) in a CSV under the plugin's data directory, a row every 30 seconds, to calibrate a board's battery percentage from a full discharge. Off by default. Contributed by Antonio Lourenco (@tozes).
 - Spoken replies stay paced after the text-to-speech producer pauses. A sign error in the hub's stall handling let the rest of a reply go out in one burst after the first pause, which could overflow a device's speaker buffer. A fake-clock test now holds every frame within the playback lead, before and after a stall.
 - Enrollment by unapproved devices is bounded: at most 16 may wait to be paired, 4 per network address, and an unapproved record expires an hour after the device's last contact. `hermes gadget pair --yes` approves blindly only when one device is waiting; `hermes gadget pair <device>` picks one. `hermes gadget devices` marks devices still waiting to pair.
 - `hermes gadget forget` takes effect on a running gateway. The device store re-reads `devices.json` before every operation and writes through a per-process temporary file, so the gateway no longer keeps a stale copy of a forgotten key or writes it back when the device reconnects.

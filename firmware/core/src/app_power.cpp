@@ -59,15 +59,25 @@ void App::power_tick() {
   }
   if (!hal_.display || !hal_.display->info().has_backlight) return;
   if (display_off_by_user_) {
-    // Off stays off through replies; a question or an update still shows.
-    if (prompt_showing() || ota_busy() || ota_ == Ota::Restarting || phase_ != Phase::Online) wake_display();
+    // Off stays off through replies and reconnects; a question or an update still shows.
+    if (prompt_showing() || ota_busy() || ota_ == Ota::Restarting) wake_display();
     return;
   }
-  if (!screen_timeout_ms_) return;
-  const bool idle = mode_ == Mode::Idle && !speaking() && !quick_controls_open_ && !talk_held_ && !cancel_held_ &&
-                    !prompt_showing() && wifi_setup_text_.empty() && !ota_busy() && ota_ != Ota::Restarting && overlay_ == Overlay::None &&
-                    (phase_ == Phase::NoNetwork || (phase_ == Phase::Online && paired_));
-  if (!idle) { wake_display(); return; }
+  // Without a timeout, only a screen that is already dark needs watching.
+  if (!screen_timeout_ms_ && !display_sleeping_) return;
+  // The settings menu can sleep too; the wake input leaves it on the same item.
+  const bool busy = mode_ != Mode::Idle || speaking() || quick_controls_open_ || talk_held_ || cancel_held_ ||
+                    prompt_showing() || !wifi_setup_text_.empty() || ota_busy() || ota_ == Ota::Restarting ||
+                    overlay_ != Overlay::None;
+  const bool settled = phase_ == Phase::NoNetwork || (phase_ == Phase::Online && paired_);
+  // Something for the user wakes the screen. A connection still settling keeps a
+  // lit screen lit, but leaves a dark one dark: Wi-Fi coming and going (a commute)
+  // must not turn the screen on and leave it on.
+  if (busy || (!settled && !display_sleeping_)) {
+    wake_display();
+    return;
+  }
+  if (!settled || !screen_timeout_ms_) return;
   const uint32_t elapsed = now() - activity_at_;
   if (elapsed >= screen_timeout_ms_ && !display_sleeping_) {
     darken_display();
