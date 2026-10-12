@@ -126,12 +126,13 @@ wait_for_status
 
 # A nonzero start command must also restore the previous release.
 set_release_id abababababab
+start_log_at=$(wc -l < /systemctl.log)
 if FAKE_START_EXIT=1 sh install.sh; then
     echo 'the installer should have reported the start failure' >&2
     exit 1
 fi
 test "$(current)" = "$second"
-grep -q '^reset-failed hermes-gadget.service$' /systemctl.log
+tail -n "+$((start_log_at + 1))" /systemctl.log | grep -q '^reset-failed hermes-gadget.service$'
 wait_for_status
 
 if HERMES_GADGET_HEALTH_TIMEOUT=invalid sh install.sh; then

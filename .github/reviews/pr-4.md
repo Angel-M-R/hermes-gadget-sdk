@@ -97,3 +97,13 @@ No USB flashing, physical audio measurement, frequency/power measurement or expe
 ## Python 3.10 CI follow-up
 
 The concurrency regression correctly waited on the file lock, but expected the built-in TimeoutError. Python 3.10's Future.result raises concurrent.futures.TimeoutError, which is a separate class there. Importing that exception explicitly preserves the same blocking assertion on every supported Python version. The isolated regression failed before this two-line correction and the plugin unit suite passed afterward on Python 3.10 and 3.13. Production code is unchanged.
+
+
+## Review of the follow-up commit
+
+- [tests/test_plugin_units.py:148](https://github.com/Angel-M-R/hermes-gadget-sdk/pull/4#discussion_r4247213718): Addressed in ddbb890: the Python 3.10 concurrency assertion imports the futures exception. All 18 plugin unit tests passed on Python 3.10 and 3.13.
+- [linux/test_install.sh:134](https://github.com/Angel-M-R/hermes-gadget-sdk/pull/4#discussion_r4247213722): Addressed: the nonzero-start test searches only log entries added by that install attempt, so a prior rollback cannot satisfy the reset-failed assertion.
+- [THIRD_PARTY_NOTICES.md:31](https://github.com/Angel-M-R/hermes-gadget-sdk/pull/4#discussion_r4247213731): Addressed: distinguish internal write bounds during encoding, payload capacity rejection after codeword encoding, pre-encoding input/ECC/version checks, and the caller-owned module buffer contract.
+- [docs/linux.md:331](https://github.com/Angel-M-R/hermes-gadget-sdk/pull/4#discussion_r4247213752): Addressed: startup and automatic health-check rollback apply only when the service was running before the update; a previously stopped service stays stopped.
+
+Follow-up validation: 125 documentation/version/package/plugin tests passed on Python 3.10; the strengthened Linux installer suite and shellcheck passed in a disposable Debian ARM64 container, followed by 11 UI/Linux client cases. The site built all 19 guides. Distribution notices and checksums were regenerated and checked against the source. No production code changed in this follow-up.

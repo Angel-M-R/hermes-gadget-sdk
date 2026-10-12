@@ -28,7 +28,7 @@ The mascot artwork, and the logo and device bitmaps drawn from it, come from [He
 
 ## Vendored code
 
-The QR code encoder in `firmware/core/third_party/qrcode/` is vendored from [ricmoo/QRCode](https://github.com/ricmoo/QRCode) (MIT, © 2017 Richard Moore and © 2017 Project Nayuki), which in turn derives from [Project Nayuki's QR Code generator](https://www.nayuki.io/page/qr-code-generator-library). It is adapted for this project: the C99 variable-length arrays become fixed, bounded buffers so MSVC accepts the file, and checks for buffer capacity, input length, error-correction level and locked version reject invalid requests before encoding. The modification notice is in [NOTICE](NOTICE) and the upstream license in [LICENSES/QRCode-MIT.txt](LICENSES/QRCode-MIT.txt).
+The QR code encoder in `firmware/core/third_party/qrcode/` is vendored from [ricmoo/QRCode](https://github.com/ricmoo/QRCode) (MIT, © 2017 Richard Moore and © 2017 Project Nayuki), which in turn derives from [Project Nayuki's QR Code generator](https://www.nayuki.io/page/qr-code-generator-library). It is adapted for this project: the C99 variable-length arrays become fixed, bounded buffers so MSVC accepts the file. Internal bit-writer bounds prevent overflow during encoding; the encoded payload's capacity is checked before drawing the matrix. Input length, error-correction level and locked-version checks reject invalid requests before encoding. The raw API requires a correctly sized caller-supplied module buffer; it does not receive or validate that buffer's length. The modification notice is in [NOTICE](NOTICE) and the upstream license in [LICENSES/QRCode-MIT.txt](LICENSES/QRCode-MIT.txt).
 
 ## Adapted display initialization tables
 
